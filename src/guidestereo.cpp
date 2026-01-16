@@ -26,6 +26,8 @@
 #include <libserial/SerialPort.h>
 
 int if_save = 0;
+std::atomic<int> if_sync{-1};
+std::vector<int> is_sync_on = {0, 0};
 const int kReqCount = 4;
 
 struct buffer {
@@ -39,6 +41,18 @@ DataBuffer query_cmd = {
     0x55, 0xAA, 0x07, 0x00,
     0x00, 0x80, 0x00, 0x00,
     0x00, 0x00, 0x87, 0xF0
+};
+
+DataBuffer sync_on = {
+    0x55, 0xAA, 0x07, 0x02,
+    0x01, 0x01, 0x00, 0x00,
+    0x00, 0x01, 0x04, 0xF0
+};
+
+DataBuffer sync_off = {
+    0x55, 0xAA, 0x07, 0x02,
+    0x01, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x05, 0xF0
 };
 
 std::vector<SerialPort> serials(2);
@@ -275,7 +289,7 @@ void consumer(int id)
         }
         lr_cv[id].notify_one();  // Notify producers that space is available in the queue
         
-        if (if_save) save_frame(frame);
+        if (if_save) save_frame(frame); 
         else std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     std::cout << "Closing time stream " << id << std::endl;
@@ -466,6 +480,33 @@ void query_serial(int port_id)
     }
 }
 
+void sync_serial(int port_id)
+{
+    while(!quitFlag.load()){
+        std::unique_lock<std::mutex> lock(lr_serial_mutex[port_id]);
+        lr_serial_cv[port_id].wait(lock, [&] {
+            return (if_sync != -1) || quitFlag.load();
+        });
+        if (quitFlag.load()) break;
+        try {
+            if (if_sync.load() == 1 && is_sync_on[port_id] == 0){ // sync on
+                serials[port_id].Write(sync_on);
+                is_sync_on[port_id] = 1;
+            }
+            if (if_sync.load() == 0 && is_sync_on[port_id] == 1){ //sync off
+                serials[port_id].Write(sync_off);
+                is_sync_on[port_id] = 0;
+            }
+            if (is_sync_on[0] == is_sync_on[1]){
+                if_sync.store(-1);
+            }
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Sync Port " << port_id << " error: " << e.what() << std::endl;
+        }
+    }
+}  
+
 void recv_serial(int port_id)
 {
     std::vector<unsigned char> buffer;
@@ -571,6 +612,12 @@ int main(int argc, char **argv) {
         recv_threads.emplace_back(recv_serial, i);
     }
 
+    const int numSyncThreads = 2;
+    std::vector<std::thread> sync_threads;
+    for (int i = 0; i < numSyncThreads; ++i) {
+        sync_threads.emplace_back(sync_serial, i);
+    }
+
     const int numDisplays = 2;
     std::vector<std::thread> display_threads;
     for (int i = 0; i < numDisplays; ++i) {
@@ -596,8 +643,24 @@ int main(int argc, char **argv) {
         });
     }
 
+    std::string sync_input;
+    std::thread interface_t([&]() { // Interface thread
+        while (!quitFlag.load()) {
+            std::cout << "External sync on (1) or off (0): ";
+            std::cin >> sync_input;
+            if (sync_input == "1") {
+                if_sync.store(1);
+                std::cout << "Sync on command sent.\n";
+            } else if (sync_input == "0") {
+                if_sync.store(0);
+                std::cout << "Sync off command sent.\n";
+            }
+        }
+    });
+
+
     while (!quitFlag.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     for (auto& t : producers) {
@@ -619,6 +682,12 @@ int main(int argc, char **argv) {
     for(auto& t : recv_threads) {
         t.join();
     }
+
+    for(auto& t : sync_threads) {
+        t.join();
+    }
+
+    interface_t.join();
 
     return EXIT_SUCCESS;
 }
