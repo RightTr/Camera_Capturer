@@ -89,14 +89,16 @@ Please follow the instuctions above to check video streams and serial devices of
 ./build/guidestereo (<if_save>) (<output_dir>)
 ```
 
-Supports external trigger input (1.8 voltage 30Hz 50% duty-cycle PWM), and turn on synchronization mode.
+Supports external trigger input (1.8 voltage 30Hz 50% duty-cycle PWM) which must be provided before enabling synchronization mode.
 
 ```bash
 External sync on (1) or off (0): 1
 Sync on command sent.
+Port 0 Sync on
+Port 1 Sync on
 ```
 
 ## TODO
 
 * To capsulate functionality in a class
-* ARM64 Architecture Adaption
+* ARM64 Architecture Adaption Test
