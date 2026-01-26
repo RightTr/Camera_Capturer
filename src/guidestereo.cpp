@@ -211,9 +211,6 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
     cv::Mat temperature_celsius;
     ParamData param_data;
 
-    serial_cmd[cam_id].store(SerialCmd::QUERY);
-    serial_cv[cam_id].notify_one();
-
     timeval tv;
 
     tv = buf->timestamp;
@@ -240,7 +237,7 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
             return lr_output_queue[cam_id].size() < MAX_QUEUE_SIZE || quitFlag.load();
         });
         
-        if (!quitFlag.load()) return ;
+        if (quitFlag.load()) return ;
         lr_output_queue[cam_id].emplace(StampedFrame{cam_id, gray_image, temperature_celsius, param_data, sec.count(), nanosec, tv.tv_sec, tv.tv_usec});
     }
     lr_cv[cam_id].notify_one();  // Notify consumers that new data is available
@@ -476,23 +473,23 @@ void serial_worker(int port_id)
             break;
 
         cmd = serial_cmd[port_id].exchange(SerialCmd::NONE);
-        lock.unlock();
         
+        lock.unlock();
+        serial_cv[port_id].notify_one();
+
         try {
             switch (cmd) {
             case SerialCmd::SYNC_ON:
                 serials[port_id].Write(sync_on);
-                printf("Port %d write SYNC_ON", port_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                printf("Port %d write SYNC_ON\n", port_id);
                 break;
             case SerialCmd::SYNC_OFF:
                 serials[port_id].Write(sync_off);
-                printf("Port %d write SYNC_OFF", port_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                printf("Port %d write SYNC_OFF\n", port_id);
                 break;
             case SerialCmd::QUERY:
                 serials[port_id].Write(query_cmd);
-                // printf("Port %d write QUERY", port_id);
+                // printf("Port %d write QUERY\n", port_id);
                 unsigned char byte;
                 serials[port_id].ReadByte(byte, 10);
                 if (quitFlag.load()) break;
@@ -525,6 +522,21 @@ void serial_worker(int port_id)
             std::cerr << "Port " << port_id
                     << " serial error: " << e.what() << std::endl;
         }
+    }
+}
+
+void serial_query(int port_id)
+{
+    while (!quitFlag.load())
+    {
+        {
+            std::unique_lock<std::mutex> lock(serial_mutex[port_id]);
+            if (serial_cmd[port_id] == SerialCmd::NONE) {
+                serial_cmd[port_id] = SerialCmd::QUERY;
+                serial_cv[port_id].notify_one();  
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
 }
 
@@ -582,13 +594,13 @@ int main(int argc, char **argv) {
         close(lr_fd[0]);
         return EXIT_FAILURE;
     }
-    if (open_serial_port(0) < 0 || open_serial_port(1) < 0) {
-        free(lr_buffers[0]);
-        free(lr_buffers[1]);
-        close(lr_fd[0]);
-        close(lr_fd[1]);
-        return EXIT_FAILURE;
-    }
+    // if (open_serial_port(0) < 0 || open_serial_port(1) < 0) {
+    //     free(lr_buffers[0]);
+    //     free(lr_buffers[1]);
+    //     close(lr_fd[0]);
+    //     close(lr_fd[1]);
+    //     return EXIT_FAILURE;
+    // }
     // Start streaming on both cameras
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(lr_fd[0], VIDIOC_STREAMON, &type) < 0 || ioctl(lr_fd[1], VIDIOC_STREAMON, &type) < 0) {
@@ -605,10 +617,15 @@ int main(int argc, char **argv) {
         producers.emplace_back(producer, trigger_fps, i);
     }
 
-    std::vector<std::thread> serial_worker_threads;
-    for (int i = 0; i < 2; ++i) {
-        serial_worker_threads.emplace_back(serial_worker, i);
-    }
+    // std::vector<std::thread> serial_worker_threads;
+    // for (int i = 0; i < 2; ++i) {
+    //     serial_worker_threads.emplace_back(serial_worker, i);
+    // }
+
+    // std::vector<std::thread> serial_query_threads;
+    // for (int i = 0; i < 2; ++i) {
+    //     serial_query_threads.emplace_back(serial_query, i);
+    // }
 
     const int numDisplays = 2;
     std::vector<std::thread> display_threads;
@@ -678,9 +695,13 @@ int main(int argc, char **argv) {
         t.join();
     }
 
-    for(auto& t : serial_worker_threads) {
-        t.join();
-    }
+    // for(auto& t : serial_worker_threads) {
+    //     t.join();
+    // }
+
+    // for (auto& t : serial_query_threads) {
+    //     t.join();
+    // }
 
     interface_t.join();
 

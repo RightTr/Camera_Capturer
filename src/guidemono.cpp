@@ -420,7 +420,7 @@ int main(int argc, char **argv) {
     snprintf(serial_port, sizeof(serial_port), "/dev/ttyACM%d", portid);
     if (if_save) prepare_dirs(outputdir);
     if (init_camera(dev, 1280, 513) < 0) return -1;
-    if (open_serial_port(serial_port) < 0) return -1;
+    // if (open_serial_port(serial_port) < 0) return -1;
 
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(fd, VIDIOC_STREAMON, &type) < 0) {
@@ -431,8 +431,8 @@ int main(int argc, char **argv) {
 
     std::thread t_producer(producer, maxfps);
     std::thread t_consumer(consumer);
-    std::thread t_query(query_serial, query_cmd);
-    std::thread t_recv(recv_serial);
+    // std::thread t_query(query_serial, query_cmd);
+    // std::thread t_recv(recv_serial);
 
     while (!quitFlag.load()) {
         StampedFrame frame;
@@ -456,8 +456,8 @@ int main(int argc, char **argv) {
     query_cv.notify_all();
     t_producer.join();
     t_consumer.join();
-    t_query.join();
-    t_recv.join();
+    // t_query.join();
+    // t_recv.join();
 
     return 0;
 }

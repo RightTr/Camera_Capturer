@@ -70,6 +70,11 @@ if(USE_ROS1)
         ${catkin_INCLUDE_DIRS}
         ${OpenCV_INCLUDE_DIRS}
         )
+    
+    catkin_package(
+        CATKIN_DEPENDS roscpp std_msgs sensor_msgs
+        INCLUDE_DIRS
+    )
 
     add_executable(guidestereo_node src/guidestereo_ros.cpp)
     target_link_libraries(guidestereo_node
@@ -77,6 +82,7 @@ if(USE_ROS1)
         pthread
         serial
         )
+
 endif()
 
 if(USE_ROS2)

@@ -232,9 +232,6 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
     cv::Mat temperature_celsius;
     ParamData param_data;
 
-    serial_cmd[cam_id].store(SerialCmd::QUERY);
-    serial_cv[cam_id].notify_one();
-
     timeval tv;
     {
         std::lock_guard<std::mutex> lock(lr_mutex[cam_id]);
@@ -483,13 +480,19 @@ void serial_worker(int port_id)
             switch (cmd) {
             case SerialCmd::SYNC_ON:
                 serials[port_id].Write(sync_on);
+                #ifdef USE_ROS1
+                ROS_INFO("Port %d write SYNC_ON", port_id);
+                #elif define(USE_ROS2)
                 RCLCPP_INFO(rclcpp::get_logger("camera_capturer"), "Port %d write SYNC_ON", port_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                #endif
                 break;
             case SerialCmd::SYNC_OFF:
                 serials[port_id].Write(sync_off);
+                #ifdef USE_ROS1
+                ROS_INFO("Port %d write SYNC_OFF", port_id);
+                #elif define(USE_ROS2)
                 RCLCPP_INFO(rclcpp::get_logger("camera_capturer"), "Port %d write SYNC_OFF", port_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                #endif
                 break;
             case SerialCmd::QUERY:
                 serials[port_id].Write(query_cmd);
@@ -529,6 +532,21 @@ void serial_worker(int port_id)
     }
 }
 
+void serial_query(int port_id)
+{
+    while (ros_ok())
+    {
+        {
+            std::unique_lock<std::mutex> lock(serial_mutex[port_id]);
+            if (serial_cmd[port_id] == SerialCmd::NONE) {
+                serial_cmd[port_id] = SerialCmd::QUERY;
+                serial_cv[port_id].notify_one();  
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+}
+
 int main(int argc, char **argv) {
 
     int trigger_fps = 30;
@@ -554,7 +572,7 @@ int main(int argc, char **argv) {
         [&](const std_msgs::Int32::ConstPtr& msg) {
             for (int i = 0; i < 2; ++i) {
                 serial_cmd[i].store(msg->data ? SerialCmd::SYNC_ON : SerialCmd::SYNC_OFF);
-                serial_cv[port_id].notify_one();
+                serial_cv[i].notify_one();
             }
         });
 
@@ -621,6 +639,11 @@ int main(int argc, char **argv) {
     for (int i = 0; i < numProducers; ++i) {
         producers.emplace_back(producer, trigger_fps, i);
     }
+    
+    std::vector<std::thread> serial_query_threads;
+    for (int i = 0; i < 2; ++i) {
+        serial_query_threads.emplace_back(serial_query, i);
+    }
 
     const int numSerialThreads = 2;
     std::vector<std::thread> serial_worker_threads;
@@ -663,6 +686,11 @@ int main(int argc, char **argv) {
     for(auto& t : serial_worker_threads) {
         t.join();
     }
+
+    for (auto& t : serial_query_threads) {
+        t.join();
+    }
+
 
     return EXIT_SUCCESS;
 }

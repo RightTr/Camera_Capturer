@@ -254,7 +254,7 @@ int main(int argc, char **argv) {
             cv::Mat gray_norm;
             cv::normalize(frame.depth_image_raw, gray_norm, 0, 255, cv::NORM_MINMAX);
             gray_norm.convertTo(gray_norm, CV_8UC1);
-            cv::imshow("RGB", frame.color_image);
+            // cv::imshow("RGB", frame.color_image);
             cv::imshow("Depth_vis", gray_norm);
             cv::waitKey(1);
         }   

@@ -28,6 +28,7 @@
 #include <signal.h>
 
 int if_save = 0;
+int realsense_sync = 0;
 const int kReqCount = 4;
 
 struct buffer {
@@ -223,9 +224,6 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
     cv::Mat gray_image;
     cv::Mat temperature_celsius;
     ParamData param_data;
-
-    serial_cmd[cam_id].store(SerialCmd::QUERY);
-    serial_cv[cam_id].notify_one();
 
     timeval tv;
 
@@ -468,7 +466,6 @@ void prepare_dirs(const std::string& outputdir) {
         std::filesystem::create_directories(outputdir + "/right/temperature");
         std::filesystem::create_directories(outputdir + "/realsense/rgb");
         std::filesystem::create_directories(outputdir + "/realsense/depth_raw");
-        std::filesystem::create_directories(outputdir + "/realsense/depth_vis");
         lr_time_stream[0].open(outputdir + "/left/times.txt", std::ios::out);
         lr_time_stream[1].open(outputdir + "/right/times.txt", std::ios::out);
         rs_time_stream.open(outputdir + "/realsense/times.txt", std::ios::out);
@@ -489,7 +486,8 @@ void guide_producer(int fps, int id)
     auto last_frame_time = std::chrono::system_clock::now();
     long expected_delta = 1000000 / fps; // in microsecs.
     while (!quitFlag.load()) {
-        int ret = poll(&pfd, 1, -1);  // Wait indefinitely for an event
+        int ret = poll(&pfd, 1, 33);
+        if (quitFlag.load()) break; 
         if (ret < 0) {
             perror("poll");
             break;
@@ -556,16 +554,24 @@ void realsense_producer(const std::string& rs_device){
         cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_BGR8, 30);
         cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16, 30);
         
-        rs2::pipeline_profile profile = pipline.start(cfg);
-        
-        if(if_save) save_realsense_intrinsics(profile, outputdir);
+        rs2::context ctx;
+        auto devices = ctx.query_devices();
+        if (devices.size() == 0) {
+            throw std::runtime_error("No RealSense device found");
+        }
 
-        rs2::depth_sensor depth_sensor = profile.get_device().first<rs2::depth_sensor>();
+        rs2::device dev = devices.front();
+        rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
 
         if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
             float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
             depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
             std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
+        }
+
+        if (realsense_sync) {
+            depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, 3);
+            std::cout << "[realsense] Sync ON" << std::endl;
         }
         
         if(if_save){
@@ -574,6 +580,10 @@ void realsense_producer(const std::string& rs_device){
             scale_file << std::fixed << std::setprecision(10) << depth_scale;
             scale_file.close();
         }
+
+        rs2::pipeline_profile profile = pipline.start(cfg);
+
+        if(if_save) save_realsense_intrinsics(profile, outputdir);
 
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
@@ -642,12 +652,10 @@ void serial_worker(int port_id)
             case SerialCmd::SYNC_ON:
                 serials[port_id].Write(sync_on);
                 printf("Port %d write SYNC_ON", port_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 break;
             case SerialCmd::SYNC_OFF:
                 serials[port_id].Write(sync_off);
                 printf("Port %d write SYNC_OFF", port_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 break;
             case SerialCmd::QUERY:
                 serials[port_id].Write(query_cmd);
@@ -687,9 +695,25 @@ void serial_worker(int port_id)
     }
 }
 
+void serial_query(int port_id)
+{
+    while (!quitFlag.load())
+    {
+        {
+            std::unique_lock<std::mutex> lock(serial_mutex[port_id]);
+            if (serial_cmd[port_id] == SerialCmd::NONE) {
+                serial_cmd[port_id] = SerialCmd::QUERY;
+                serial_cv[port_id].notify_one();  
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+}
+
 void signal_handler(int)
 {
     quitFlag.store(true);
+    rgbd_cv.notify_all();
     for (int i = 0; i < 2; ++i) {
         lr_cv[i].notify_all();
         serial_cv[i].notify_all();
@@ -704,13 +728,18 @@ int main(int argc, char **argv) {
     int trigger_fps = 30;
     outputdir = "./capture";
 
-    std::cout << "Usage: " << argv[0] << " (<if_save>) (<output_dir>)" << std::endl;
+    std::cout << "Usage: " << argv[0] << "(<realsense_sync>) (<if_save>) (<output_dir>)" << std::endl;
     if (argc == 2) {
-        if_save = atoi(argv[1]);
+        realsense_sync = atoi(argv[1]);
+    }
+    else if (argc == 3) {
+        realsense_sync = atoi(argv[1]);
+        if_save = atoi(argv[2]);
     }
     else if (argc == 3){
-        if_save = atoi(argv[1]);
-        outputdir = argv[2];
+        realsense_sync = atoi(argv[1]);
+        if_save = atoi(argv[2]);
+        outputdir = argv[3];
     }
     printf("trigger_fps %d, outputdir %s\n", trigger_fps, outputdir.c_str());
 
@@ -771,6 +800,11 @@ int main(int argc, char **argv) {
         serial_worker_threads.emplace_back(serial_worker, i);
     }
 
+    std::vector<std::thread> serial_query_threads;
+    for (int i = 0; i < 2; ++i) {
+        serial_query_threads.emplace_back(serial_query, i);
+    }
+
     std::vector<std::thread> display_threads;
     for (int i = 0; i < 2; ++i) {
         display_threads.emplace_back([i]() {
@@ -806,7 +840,7 @@ int main(int argc, char **argv) {
             cv::Mat gray_norm;
             cv::normalize(frame.depth_image_raw, gray_norm, 0, 255, cv::NORM_MINMAX);
             gray_norm.convertTo(gray_norm, CV_8UC1);
-            cv::imshow("RGB", frame.color_image);
+            // cv::imshow("RGB", frame.color_image);
             cv::imshow("Depth_vis", gray_norm);
             cv::waitKey(1);
         }   
@@ -856,6 +890,10 @@ int main(int argc, char **argv) {
     }
 
     for(auto& t : serial_worker_threads) {
+        t.join();
+    }
+
+    for (auto& t : serial_query_threads) {
         t.join();
     }
 
