@@ -142,10 +142,11 @@ Please follow the instuctions above to check video streams and serial devices of
 
 ```bash
 ./build/guidestereo (<if_save>) (<tempIncre_detect>) (<output_dir>)
-# tempIncre_detect (default: false), if the focal temperature of the guide thermal infrared camera varies by more than 0.1°C, it will automatically capture 30 frames, and then stop saving to avoid excessive data.
 ```
 
 Supports external trigger input (1.8 voltage 30Hz 50% duty-cycle PWM) which must be provided before enabling synchronization mode.
+
+tempIncre_detect (default: false), if the focal temperature of the guide thermal infrared camera varies by more than 0.1°C, it will automatically capture 30 frames, and then stop saving to avoid excessive data.
 
 ```bash
 External sync on (1) or off (0): 1
@@ -158,10 +159,11 @@ Port 1 Sync on
 
 ```bash
 ./build/camera_RGBDT (<realsense_sync>) (<if_save>) (<tempIncre_detect>) (<output_dir>)
-# tempIncre_detect (default: false), same as the description above. Especially, when the focal temperature of the dev_camera[0] (default thermal_left) varies by more than 0.1°C, the Realsense consumer thread will start capturing 30 frames according to the temperature increase signal from dev_camera[0].
 ```
 
 Following the instructions above to turn on Guide Stereo external trigger synchronization.
+
+tempIncre_detect (default: false), same as the description above. Especially, when the focal temperature of the dev_camera[0] (default thermal_left) varies by more than 0.1°C, the Realsense consumer thread will start capturing 30 frames according to the temperature increase signal from dev_camera[0].
 
 ### 3.2 Run with ROS
 
