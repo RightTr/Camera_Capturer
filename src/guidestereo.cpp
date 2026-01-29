@@ -29,6 +29,7 @@
 int if_save = 0;
 std::vector<std::atomic<int>> if_sync(2);  // -1: no change, 0: sync off, 1: sync on
 const int kReqCount = 4;
+int tempIncre_detect = 0;
 
 struct buffer {
     void *start;
@@ -67,6 +68,8 @@ std::vector<std::atomic<SerialCmd>> serial_cmd(2);
 std::vector<SerialPort> serials(2);
 
 std::atomic<bool> quitFlag(false);  // Flag to signal consumer to stop
+
+std::vector<std::atomic<bool>> tempIncre(2);
 
 typedef std::chrono::time_point<std::chrono::system_clock> TimePoint;
 
@@ -279,6 +282,7 @@ void save_frame(const StampedFrame &frame) {
 
 void consumer(int id)
 {
+    int count = 0;
     while (!quitFlag.load()) {
         StampedFrame frame;
         {
@@ -289,8 +293,12 @@ void consumer(int id)
             lr_output_queue[id].pop();
         }
         lr_cv[id].notify_one();  // Notify producers that space is available in the queue
-        
-        if (if_save) save_frame(frame); 
+
+        if (tempIncre[id].exchange(false)) count = 0;
+        if (if_save && count < 30) {   
+            save_frame(frame); 
+            if (tempIncre_detect) count++;
+        }
         else std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     std::cout << "Closing time stream " << id << std::endl;
@@ -460,7 +468,7 @@ void producer(int fps, int id)
 void serial_worker(int port_id)
 {
     std::vector<unsigned char> buffer;
-    uint16_t focal_temp = 0;
+    float focal_temp0 = 0;
     while(!quitFlag.load()){
         SerialCmd cmd;
         std::unique_lock<std::mutex> lock(serial_mutex[port_id]);
@@ -504,11 +512,16 @@ void serial_worker(int port_id)
                         continue;
                     }
                     auto now = std::chrono::system_clock::now();
-                    focal_temp = (static_cast<uint16_t>(buffer[9]) << 8) | static_cast<uint16_t>(buffer[10]); // Obtain focal plane temperature
+                    float focal_temp = ((static_cast<uint16_t>(buffer[9]) << 8) | static_cast<uint16_t>(buffer[10])) / 100.0f; // Obtain focal plane temperature
+                    if (abs(focal_temp - focal_temp0) >= 0.1) {
+                        printf("Camera %d Temp_last: %f, Temp_curr: %f\n", port_id, focal_temp0, focal_temp);
+                        tempIncre[port_id].store(true);
+                        focal_temp0 = focal_temp;
+                    }
                     auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
                     auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
                     lr_temp_stream[port_id] << sec.count() << "." << std::setw(9) << std::setfill('0') << 
-                            nanosec << " " << (static_cast<float>(focal_temp) / 100.0f) << std::endl;
+                            nanosec << " " << focal_temp << std::endl;
                 }
                 break;
             default:
@@ -557,13 +570,18 @@ int main(int argc, char **argv) {
     int trigger_fps = 30;
     outputdir = "./capture";
 
-    std::cout << "Usage: " << argv[0] << " (<if_save>) (<output_dir>)" << std::endl;
+    std::cout << "Usage: " << argv[0] << " (<if_save>) (<tempIncre_detect>) (<output_dir>)" << std::endl;
     if (argc == 2) {
         if_save = atoi(argv[1]);
     }
-    else if (argc == 3){
+    else if (argc == 3) {
         if_save = atoi(argv[1]);
-        outputdir = argv[2];
+        tempIncre_detect = atoi(argv[2]);
+    }
+    else if (argc == 4){
+        if_save = atoi(argv[1]);
+        tempIncre_detect = atoi(argv[2]);
+        outputdir = argv[3];
     }
     printf("trigger_fps %d, outputdir %s\n", trigger_fps, outputdir.c_str());
 
@@ -585,6 +603,10 @@ int main(int argc, char **argv) {
         cmd.store(SerialCmd::NONE);
     }
 
+    for (auto& v : tempIncre) {
+        v.store(false);
+    }
+
     // Initialize left and right cameras
     if (init_camera(dev_left, &lr_fd[0], &lr_buffers[0], 1280, 513) != 0) {
         return EXIT_FAILURE;
@@ -594,13 +616,13 @@ int main(int argc, char **argv) {
         close(lr_fd[0]);
         return EXIT_FAILURE;
     }
-    // if (open_serial_port(0) < 0 || open_serial_port(1) < 0) {
-    //     free(lr_buffers[0]);
-    //     free(lr_buffers[1]);
-    //     close(lr_fd[0]);
-    //     close(lr_fd[1]);
-    //     return EXIT_FAILURE;
-    // }
+    if (open_serial_port(0) < 0 || open_serial_port(1) < 0) {
+        free(lr_buffers[0]);
+        free(lr_buffers[1]);
+        close(lr_fd[0]);
+        close(lr_fd[1]);
+        return EXIT_FAILURE;
+    }
     // Start streaming on both cameras
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(lr_fd[0], VIDIOC_STREAMON, &type) < 0 || ioctl(lr_fd[1], VIDIOC_STREAMON, &type) < 0) {
@@ -617,15 +639,15 @@ int main(int argc, char **argv) {
         producers.emplace_back(producer, trigger_fps, i);
     }
 
-    // std::vector<std::thread> serial_worker_threads;
-    // for (int i = 0; i < 2; ++i) {
-    //     serial_worker_threads.emplace_back(serial_worker, i);
-    // }
+    std::vector<std::thread> serial_worker_threads;
+    for (int i = 0; i < 2; ++i) {
+        serial_worker_threads.emplace_back(serial_worker, i);
+    }
 
-    // std::vector<std::thread> serial_query_threads;
-    // for (int i = 0; i < 2; ++i) {
-    //     serial_query_threads.emplace_back(serial_query, i);
-    // }
+    std::vector<std::thread> serial_query_threads;
+    for (int i = 0; i < 2; ++i) {
+        serial_query_threads.emplace_back(serial_query, i);
+    }
 
     const int numDisplays = 2;
     std::vector<std::thread> display_threads;
@@ -695,13 +717,13 @@ int main(int argc, char **argv) {
         t.join();
     }
 
-    // for(auto& t : serial_worker_threads) {
-    //     t.join();
-    // }
+    for(auto& t : serial_worker_threads) {
+        t.join();
+    }
 
-    // for (auto& t : serial_query_threads) {
-    //     t.join();
-    // }
+    for (auto& t : serial_query_threads) {
+        t.join();
+    }
 
     interface_t.join();
 

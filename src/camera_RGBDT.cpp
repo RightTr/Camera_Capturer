@@ -30,6 +30,7 @@
 int if_save = 0;
 int realsense_sync = 0;
 const int kReqCount = 4;
+int tempIncre_detect = 0;
 
 struct buffer {
     void *start;
@@ -70,6 +71,8 @@ std::vector<SerialPort> serials(2);
 std::atomic<bool> quitFlag(false);  // Flag to signal consumer to stop
 
 std::vector<std::atomic<bool>> serial_flag(2);  // Flag to signal serial communication
+
+std::vector<std::atomic<bool>> tempIncre(2);
 
 typedef std::chrono::time_point<std::chrono::system_clock> TimePoint;
 
@@ -306,6 +309,7 @@ void save_realsense_frame(const StampedRealSenseFrame& frame){
 
 void guide_consumer(int id)
 {
+    int count = 0;
     while (!quitFlag.load()) {
         StampedGuideFrame frame;
         {
@@ -317,7 +321,11 @@ void guide_consumer(int id)
         }
         lr_cv[id].notify_one();  // Notify producers that space is available in the queue
         
-        if (if_save) save_guide_frame(frame); 
+        if (tempIncre[id].exchange(false)) count = 0;
+        if (if_save && count < 30) {   
+            save_guide_frame(frame); 
+            if (tempIncre_detect) count++;
+        }
         else std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     std::cout << "Closing time stream " << id << std::endl;
@@ -329,6 +337,7 @@ void guide_consumer(int id)
 }
 
 void realsense_consumer(){
+    int count = 0;
     while (!quitFlag.load()) {
         StampedRealSenseFrame frame;
         {
@@ -340,7 +349,11 @@ void realsense_consumer(){
         }
         rgbd_cv.notify_one();  // Notify producers that space is available in the queue
         
-        if (if_save) save_realsense_frame(frame); 
+        if (tempIncre[0].exchange(false)) count = 0;
+        if (if_save && count < 30) {   
+            save_realsense_frame(frame); 
+            if (tempIncre_detect) count++;
+        }
         else std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     std::cout << "Closing realsense time stream "  << std::endl;
@@ -678,7 +691,7 @@ void serial_worker(int port_id)
                     auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
                     auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
                     lr_temp_stream[port_id] << sec.count() << "." << std::setw(9) << std::setfill('0') << 
-                            nanosec << " " << (static_cast<float>(focal_temp) / 100.0f) << std::endl;
+                            nanosec << " " << focal_temp << std::endl;
                 }
                 break;
             default:
@@ -706,7 +719,7 @@ void serial_query(int port_id)
                 serial_cv[port_id].notify_one();  
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
@@ -728,7 +741,7 @@ int main(int argc, char **argv) {
     int trigger_fps = 30;
     outputdir = "./capture";
 
-    std::cout << "Usage: " << argv[0] << "(<realsense_sync>) (<if_save>) (<output_dir>)" << std::endl;
+    std::cout << "Usage: " << argv[0] << "(<realsense_sync>) (<if_save>) (tempIncre_detect) (<output_dir>)" << std::endl;
     if (argc == 2) {
         realsense_sync = atoi(argv[1]);
     }
@@ -736,10 +749,16 @@ int main(int argc, char **argv) {
         realsense_sync = atoi(argv[1]);
         if_save = atoi(argv[2]);
     }
-    else if (argc == 3){
+    else if (argc == 4) {
         realsense_sync = atoi(argv[1]);
         if_save = atoi(argv[2]);
-        outputdir = argv[3];
+
+    }
+    else if (argc == 5){
+        realsense_sync = atoi(argv[1]);
+        if_save = atoi(argv[2]);
+        tempIncre_detect = atoi(argv[3]);
+        outputdir = argv[4];
     }
     printf("trigger_fps %d, outputdir %s\n", trigger_fps, outputdir.c_str());
 
@@ -760,6 +779,10 @@ int main(int argc, char **argv) {
 
     for (auto& cmd : serial_cmd) {
         cmd.store(SerialCmd::NONE);
+    }
+
+    for (auto& v : tempIncre) {
+        v.store(false);
     }
 
     // Initialize left and right cameras
