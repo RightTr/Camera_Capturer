@@ -14,6 +14,7 @@
 #include <ctime>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <iomanip>
 
 #include <filesystem>
@@ -115,6 +116,16 @@ struct buffer *lr_buffers[2] = { nullptr, nullptr };
 
 std::mutex serial_mutex[2];
 std::condition_variable serial_cv[2];
+
+int64_t to_ns_from_sec_nsec(long sec, long nsec)
+{
+    return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(nsec);
+}
+
+int64_t to_ns_from_sec_usec(long sec, long usec)
+{
+    return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(usec) * 1000LL;
+}
 
 std::string cameraName(int cam_id) {
     if (cam_id == 0) {
@@ -246,8 +257,20 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
 
 
 void save_frame(const StampedFrame &frame) {
-    lr_time_stream[frame.cam_id] << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
-                << "," << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << std::endl;
+    const int64_t aligned_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
+    const int64_t host_ns = aligned_ns;
+    const int64_t sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
+    const int64_t host_minus_aligned_ns = host_ns - aligned_ns;
+
+    lr_time_stream[frame.cam_id]
+        << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ","
+        << aligned_ns << ","
+        << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << ","
+        << sensor_ns << ","
+        << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ","
+        << host_ns << ","
+        << host_minus_aligned_ns
+        << std::endl;
     lr_param_stream[frame.cam_id] << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
                  << "," << frame.param_data.humidity
                  << "," << frame.param_data.distance_x10
@@ -393,12 +416,17 @@ void prepare_dirs(const std::string& outputdir) {
 
         std::filesystem::create_directories(outputdir + "/right/image");
         std::filesystem::create_directories(outputdir + "/right/temperature");
-        lr_time_stream[0].open(outputdir + "/left/times.txt", std::ios::out);
-        lr_time_stream[1].open(outputdir + "/right/times.txt", std::ios::out);
+        lr_time_stream[0].open(outputdir + "/left/times.csv", std::ios::out);
+        lr_time_stream[1].open(outputdir + "/right/times.csv", std::ios::out);
         lr_param_stream[0].open(outputdir + "/left/params.txt", std::ios::out);
         lr_param_stream[1].open(outputdir + "/right/params.txt", std::ios::out);
         lr_temp_stream[0].open(outputdir + "/left/focal_temperature.txt", std::ios::out);
         lr_temp_stream[1].open(outputdir + "/right/focal_temperature.txt", std::ios::out);
+
+        const char* time_csv_header =
+            "aligned_time,aligned_ns,sensor_time,sensor_ns,host_time,host_ns,host_minus_aligned_ns\n";
+        lr_time_stream[0] << time_csv_header;
+        lr_time_stream[1] << time_csv_header;
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Error creating directories: " << e.what() << std::endl;
     }
@@ -570,9 +598,9 @@ int main(int argc, char **argv) {
     if (if_save) prepare_dirs(outputdir);
 
     const char* dev_left  =
-        "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0"; // left camera
+        "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.3:1.0-video-index0"; // left camera
     const char* dev_right =
-        "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:8:1.0-video-index0"; // right camera
+        "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.4:1.0-video-index0"; // right camera
 
     std::vector<std::thread> consumers;
     // Start consumer threads
