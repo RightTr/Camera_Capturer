@@ -38,6 +38,7 @@
 int if_save = 0;
 int realsense_sync = 0;
 const int kReqCount = 4;
+int tempIncre_detect = 0;
 
 struct buffer {
     void *start;
@@ -75,6 +76,8 @@ std::vector<std::atomic<SerialCmd>> serial_cmd(2);
 std::vector<SerialPort> serials(2);
 std::atomic<bool> quitFlag(false);
 std::vector<std::atomic<bool>> serial_flag(2);
+
+std::vector<std::atomic<bool>> tempIncre(2);
 
 typedef std::chrono::time_point<std::chrono::system_clock> TimePoint;
 
@@ -491,6 +494,7 @@ void save_imu_frame(const StampedImuFrame& frame) {
 
 void guide_consumer(int id)
 {
+    int count = 0;
     while (!quitFlag.load()) {
         StampedGuideFrame frame;
         {
@@ -970,7 +974,7 @@ void serial_query(int port_id)
                 serial_cv[port_id].notify_one();
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
@@ -1002,7 +1006,13 @@ int main(int argc, char **argv) {
     } else if (argc == 4) {
         realsense_sync = atoi(argv[1]);
         if_save = atoi(argv[2]);
-        outputdir = argv[3];
+
+    }
+    else if (argc == 5){
+        realsense_sync = atoi(argv[1]);
+        if_save = atoi(argv[2]);
+        tempIncre_detect = atoi(argv[3]);
+        outputdir = argv[4];
     }
     printf("trigger_fps %d, outputdir %s\n", trigger_fps, outputdir.c_str());
 
