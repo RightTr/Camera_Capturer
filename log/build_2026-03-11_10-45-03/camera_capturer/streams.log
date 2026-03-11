@@ -1,0 +1,36 @@
+[0.018s] Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[0.340s] -- ROS2 detected
+[0.340s] -- Found rclcpp: 16.0.17 (/opt/ros/humble/share/rclcpp/cmake)
+[0.398s] -- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+[0.402s] -- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)
+[0.413s] -- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+[0.427s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[0.443s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[0.489s] -- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+[0.490s] -- Found rmw_fastrtps_cpp: 6.2.9 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+[0.632s] -- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[0.699s] -- Found sensor_msgs: 4.9.0 (/opt/ros/humble/share/sensor_msgs/cmake)
+[0.736s] -- Found cv_bridge: 3.2.1 (/opt/ros/humble/share/cv_bridge/cmake)
+[0.845s] -- Configuring done
+[0.876s] -- Generating done
+[0.887s] -- Build files have been written to: /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer
+[0.933s] [35m[1mConsolidate compiler generated dependencies of target guidemono[0m
+[0.934s] [35m[1mConsolidate compiler generated dependencies of target guidestereo[0m
+[0.934s] [35m[1mConsolidate compiler generated dependencies of target realsense[0m
+[0.934s] [35m[1mConsolidate compiler generated dependencies of target realsense_imu_test[0m
+[0.935s] [35m[1mConsolidate compiler generated dependencies of target camera_RGBDT[0m
+[0.935s] [35m[1mConsolidate compiler generated dependencies of target guidestereo_node[0m
+[0.959s] [  8%] [32mBuilding CXX object CMakeFiles/realsense_imu_test.dir/src/realsense_imu_test.cpp.o[0m
+[0.959s] [ 25%] Built target guidemono
+[0.960s] [ 58%] Built target realsense
+[0.960s] [ 58%] Built target guidestereo
+[0.973s] [ 91%] Built target guidestereo_node
+[0.973s] [ 91%] Built target camera_RGBDT
+[1.201s] [01m[K/home/pi/workspace/cap_ws/src/Camera_Capturer/src/realsense_imu_test.cpp:28:10:[m[K [01;31m[Kfatal error: [m[Krclcpp/rclcpp.hpp: No such file or directory
+[1.201s]    28 | #include [01;31m[K<rclcpp/rclcpp.hpp>[m[K
+[1.201s]       |          [01;31m[K^~~~~~~~~~~~~~~~~~~[m[K
+[1.202s] compilation terminated.
+[1.206s] gmake[2]: *** [CMakeFiles/realsense_imu_test.dir/build.make:76: CMakeFiles/realsense_imu_test.dir/src/realsense_imu_test.cpp.o] Error 1
+[1.207s] gmake[1]: *** [CMakeFiles/Makefile2:173: CMakeFiles/realsense_imu_test.dir/all] Error 2
+[1.207s] gmake: *** [Makefile:146: all] Error 2
+[1.212s] Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '2': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12

@@ -1,0 +1,239 @@
+[0.000000] (-) TimerEvent: {}
+[0.000297] (camera_capturer) JobQueued: {'identifier': 'camera_capturer', 'dependencies': OrderedDict()}
+[0.002445] (camera_capturer) JobStarted: {'identifier': 'camera_capturer'}
+[0.014645] (camera_capturer) JobProgress: {'identifier': 'camera_capturer', 'progress': 'cmake'}
+[0.015766] (camera_capturer) JobProgress: {'identifier': 'camera_capturer', 'progress': 'build'}
+[0.016843] (camera_capturer) Command: {'cmd': ['/usr/bin/cmake', '--build', '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer', '--', '-j12', '-l12'], 'cwd': '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer', 'env': OrderedDict([('PYTHON_BASIC_REPL', '1'), ('LESSOPEN', '| /usr/bin/lesspipe %s'), ('LANGUAGE', 'en_US:en'), ('USER', 'pi'), ('LC_TIME', 'en_US.UTF-8'), ('XDG_SESSION_TYPE', 'x11'), ('GIT_ASKPASS', '/usr/share/code/resources/app/extensions/git/dist/askpass.sh'), ('SHLVL', '2'), ('LD_LIBRARY_PATH', '/data/workspace/ws_livox/install/livox_sdk2/lib:/data/workspace/ws_livox/install/livox_ros_driver2/lib:/data/workspace/fast_lio/install/fast_lio/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/aarch64-linux-gnu:/opt/ros/humble/opt/openvdb_vendor/lib:/opt/ros/humble/lib'), ('HOME', '/home/pi'), ('CHROME_DESKTOP', 'code.desktop'), ('OLDPWD', '/home/pi'), ('TERM_PROGRAM_VERSION', '1.108.2'), ('DESKTOP_SESSION', 'ubuntu'), ('JETSON_L4T', '36.4.7'), ('ROS_PYTHON_VERSION', '3'), ('GNOME_SHELL_SESSION_MODE', 'ubuntu'), ('GTK_MODULES', 'gail:atk-bridge'), ('JETSON_MODEL', 'NVIDIA Jetson AGX Orin Developer Kit'), ('VSCODE_GIT_ASKPASS_MAIN', '/usr/share/code/resources/app/extensions/git/dist/askpass-main.js'), ('LC_MONETARY', 'en_US.UTF-8'), ('VSCODE_GIT_ASKPASS_NODE', '/usr/share/code/code'), ('MANAGERPID', '25676'), ('PYDEVD_DISABLE_FILE_VALIDATION', '1'), ('SYSTEMD_EXEC_PID', '26574'), ('BUNDLED_DEBUGPY_PATH', '/home/pi/.vscode/extensions/ms-python.debugpy-2025.18.0-linux-arm64/bundled/libs/debugpy'), ('VSCODE_PYTHON_AUTOACTIVATE_GUARD', '1'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('COLORTERM', 'truecolor'), ('TERMINATOR_DBUS_NAME', 'net.tenshu.Terminator23558193cd9818af7fe4d2c2f5bd9d00f'), ('GIO_LAUNCHED_DESKTOP_FILE_PID', '28481'), ('IM_CONFIG_PHASE', '1'), ('https_proxy', 'http://127.0.0.1:7890'), ('COLCON_PREFIX_PATH', '/data/workspace/ws_livox/install:/data/workspace/fast_lio/install'), ('ROS_DISTRO', 'humble'), ('GTK_IM_MODULE', 'fcitx'), ('LOGNAME', 'pi'), ('JETSON_MODULE', 'NVIDIA Jetson AGX Orin (64GB ram)'), ('JETSON_SERIAL_NUMBER', '1424624317984'), ('http_proxy', 'http://127.0.0.1:7890'), ('JOURNAL_STREAM', '8:226336'), ('_', '/usr/bin/colcon'), ('ROS_VERSION', '2'), ('XDG_SESSION_CLASS', 'user'), ('USERNAME', 'pi'), ('TERM', 'xterm-256color'), ('GNOME_DESKTOP_SESSION_ID', 'this-is-deprecated'), ('FC_FONTATIONS', '1'), ('ROS_LOCALHOST_ONLY', '0'), ('WINDOWPATH', '2'), ('PATH', '/home/pi/anaconda3/bin:/home/pi/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/pi/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/pi/anaconda3/bin:/opt/ros/humble/bin:/home/pi/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin:/home/pi/.vscode/extensions/ms-python.debugpy-2025.18.0-linux-arm64/bundled/scripts/noConfigScripts'), ('SESSION_MANAGER', 'local/ubuntu:@/tmp/.ICE-unix/26094,unix/ubuntu:/tmp/.ICE-unix/26094'), ('INVOCATION_ID', 'e5a2d638b2f643a19a9b2ad103ce440c'), ('PAPERSIZE', 'letter'), ('XDG_MENU_PREFIX', 'gnome-'), ('LC_ADDRESS', 'en_US.UTF-8'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('GDK_BACKEND', 'x11'), ('DISPLAY', ':1'), ('VSCODE_DEBUGPY_ADAPTER_ENDPOINTS', '/home/pi/.vscode/extensions/ms-python.debugpy-2025.18.0-linux-arm64/.noConfigDebugAdapterEndpoints/endpoint-b1d50aa26c43a87e.txt'), ('TERMINATOR_DBUS_PATH', '/net/tenshu/Terminator2'), ('LANG', 'en_US.UTF-8'), ('XDG_CURRENT_DESKTOP', 'ubuntu:GNOME'), ('PYTHONSTARTUP', '/home/pi/.config/Code/User/workspaceStorage/21b85a7173ee5076fd2a7d2c47a3b491/ms-python.python/pythonrc.py'), ('LC_TELEPHONE', 'en_US.UTF-8'), ('XMODIFIERS', '@im=fcitx'), ('XDG_SESSION_DESKTOP', 'ubuntu'), ('XAUTHORITY', '/run/user/1000/gdm/Xauthority'), ('LS_COLORS', 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:'), ('JETSON_SOC', 'tegra234'), ('VSCODE_GIT_IPC_HANDLE', '/run/user/1000/vscode-git-a42853d54e.sock'), ('TERM_PROGRAM', 'vscode'), ('SSH_AGENT_LAUNCHER', 'gnome-keyring'), ('SSH_AUTH_SOCK', '/run/user/1000/keyring/ssh'), ('AMENT_PREFIX_PATH', '/data/workspace/ws_livox/install/livox_ros_driver2:/data/workspace/fast_lio/install/fast_lio:/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LC_NAME', 'en_US.UTF-8'), ('TERMINATOR_UUID', 'urn:uuid:8ac5e1b4-9091-4eac-b1b4-6d47dffe0a3b'), ('QT_ACCESSIBILITY', '1'), ('GDMSESSION', 'ubuntu'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('LC_MEASUREMENT', 'en_US.UTF-8'), ('GPG_AGENT_INFO', '/run/user/1000/gnupg/S.gpg-agent:0:1'), ('LC_IDENTIFICATION', 'en_US.UTF-8'), ('VSCODE_GIT_ASKPASS_EXTRA_ARGS', ''), ('QT_IM_MODULE', 'fcitx'), ('JETSON_CUDA_ARCH_BIN', '8.7'), ('PWD', '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer'), ('LC_ALL', 'en_US.UTF-8'), ('XDG_CONFIG_DIRS', '/etc/xdg/xdg-ubuntu:/etc/xdg'), ('CLUTTER_IM_MODULE', 'xim'), ('XDG_DATA_DIRS', '/usr/share/ubuntu:/usr/share/gnome:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop'), ('PYTHONPATH', '/data/workspace/ws_livox/install/livox_ros_driver2/local/lib/python3.10/dist-packages:/data/workspace/fast_lio/install/fast_lio/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('LC_NUMERIC', 'en_US.UTF-8'), ('LC_PAPER', 'en_US.UTF-8'), ('COLCON', '1'), ('VTE_VERSION', '6800'), ('JETSON_JETPACK', ''), ('CMAKE_PREFIX_PATH', '/data/workspace/ws_livox/install/livox_ros_driver2:/data/workspace/fast_lio/install/fast_lio:/opt/ros/humble'), ('JETSON_P_NUMBER', 'p3701-0005')]), 'shell': False}
+[0.092526] (camera_capturer) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target realsense_imu_test\x1b[0m\n'}
+[0.099330] (-) TimerEvent: {}
+[0.112102] (camera_capturer) StdoutLine: {'line': b'[ 16%] Built target guidemono\n'}
+[0.114435] (camera_capturer) StdoutLine: {'line': b'[ 50%] Built target realsense_imu_test\n'}
+[0.114795] (camera_capturer) StdoutLine: {'line': b'[ 50%] Built target guidestereo\n'}
+[0.115833] (camera_capturer) StdoutLine: {'line': b'[ 66%] Built target realsense\n'}
+[0.118536] (camera_capturer) StdoutLine: {'line': b'[ 83%] Built target guidestereo_node\n'}
+[0.128098] (camera_capturer) StdoutLine: {'line': b'[ 91%] \x1b[32mBuilding CXX object CMakeFiles/camera_RGBDT.dir/src/camera_RGBDT.cpp.o\x1b[0m\n'}
+[0.199485] (-) TimerEvent: {}
+[0.300003] (-) TimerEvent: {}
+[0.400502] (-) TimerEvent: {}
+[0.501011] (-) TimerEvent: {}
+[0.601531] (-) TimerEvent: {}
+[0.702057] (-) TimerEvent: {}
+[0.802770] (-) TimerEvent: {}
+[0.903302] (-) TimerEvent: {}
+[1.003821] (-) TimerEvent: {}
+[1.104335] (-) TimerEvent: {}
+[1.204891] (-) TimerEvent: {}
+[1.305413] (-) TimerEvent: {}
+[1.405932] (-) TimerEvent: {}
+[1.506472] (-) TimerEvent: {}
+[1.606986] (-) TimerEvent: {}
+[1.707513] (-) TimerEvent: {}
+[1.808081] (-) TimerEvent: {}
+[1.908816] (-) TimerEvent: {}
+[2.009540] (-) TimerEvent: {}
+[2.110298] (-) TimerEvent: {}
+[2.210983] (-) TimerEvent: {}
+[2.311687] (-) TimerEvent: {}
+[2.412405] (-) TimerEvent: {}
+[2.513124] (-) TimerEvent: {}
+[2.613811] (-) TimerEvent: {}
+[2.714411] (-) TimerEvent: {}
+[2.815152] (-) TimerEvent: {}
+[2.915866] (-) TimerEvent: {}
+[3.016597] (-) TimerEvent: {}
+[3.117332] (-) TimerEvent: {}
+[3.218018] (-) TimerEvent: {}
+[3.318578] (-) TimerEvent: {}
+[3.419159] (-) TimerEvent: {}
+[3.519748] (-) TimerEvent: {}
+[3.620295] (-) TimerEvent: {}
+[3.721366] (-) TimerEvent: {}
+[3.822090] (-) TimerEvent: {}
+[3.923643] (-) TimerEvent: {}
+[4.024393] (-) TimerEvent: {}
+[4.125277] (-) TimerEvent: {}
+[4.226172] (-) TimerEvent: {}
+[4.327114] (-) TimerEvent: {}
+[4.427687] (-) TimerEvent: {}
+[4.528293] (-) TimerEvent: {}
+[4.628827] (-) TimerEvent: {}
+[4.729342] (-) TimerEvent: {}
+[4.829897] (-) TimerEvent: {}
+[4.930553] (-) TimerEvent: {}
+[5.031242] (-) TimerEvent: {}
+[5.131756] (-) TimerEvent: {}
+[5.232347] (-) TimerEvent: {}
+[5.333581] (-) TimerEvent: {}
+[5.434686] (-) TimerEvent: {}
+[5.535215] (-) TimerEvent: {}
+[5.635742] (-) TimerEvent: {}
+[5.736259] (-) TimerEvent: {}
+[5.836781] (-) TimerEvent: {}
+[5.937304] (-) TimerEvent: {}
+[6.037824] (-) TimerEvent: {}
+[6.138367] (-) TimerEvent: {}
+[6.238877] (-) TimerEvent: {}
+[6.339402] (-) TimerEvent: {}
+[6.439921] (-) TimerEvent: {}
+[6.540447] (-) TimerEvent: {}
+[6.640957] (-) TimerEvent: {}
+[6.741453] (-) TimerEvent: {}
+[6.841958] (-) TimerEvent: {}
+[6.942472] (-) TimerEvent: {}
+[7.042995] (-) TimerEvent: {}
+[7.143509] (-) TimerEvent: {}
+[7.244036] (-) TimerEvent: {}
+[7.344559] (-) TimerEvent: {}
+[7.445079] (-) TimerEvent: {}
+[7.545599] (-) TimerEvent: {}
+[7.646125] (-) TimerEvent: {}
+[7.746653] (-) TimerEvent: {}
+[7.847183] (-) TimerEvent: {}
+[7.947693] (-) TimerEvent: {}
+[8.048216] (-) TimerEvent: {}
+[8.148747] (-) TimerEvent: {}
+[8.249261] (-) TimerEvent: {}
+[8.349779] (-) TimerEvent: {}
+[8.450314] (-) TimerEvent: {}
+[8.551252] (-) TimerEvent: {}
+[8.651783] (-) TimerEvent: {}
+[8.752338] (-) TimerEvent: {}
+[8.852857] (-) TimerEvent: {}
+[8.953385] (-) TimerEvent: {}
+[9.053932] (-) TimerEvent: {}
+[9.154459] (-) TimerEvent: {}
+[9.254961] (-) TimerEvent: {}
+[9.355477] (-) TimerEvent: {}
+[9.455999] (-) TimerEvent: {}
+[9.556518] (-) TimerEvent: {}
+[9.657047] (-) TimerEvent: {}
+[9.757597] (-) TimerEvent: {}
+[9.858181] (-) TimerEvent: {}
+[9.958943] (-) TimerEvent: {}
+[10.059649] (-) TimerEvent: {}
+[10.160213] (-) TimerEvent: {}
+[10.261518] (-) TimerEvent: {}
+[10.362307] (-) TimerEvent: {}
+[10.463003] (-) TimerEvent: {}
+[10.563543] (-) TimerEvent: {}
+[10.664133] (-) TimerEvent: {}
+[10.764864] (-) TimerEvent: {}
+[10.865591] (-) TimerEvent: {}
+[10.966339] (-) TimerEvent: {}
+[11.067050] (-) TimerEvent: {}
+[11.167739] (-) TimerEvent: {}
+[11.268311] (-) TimerEvent: {}
+[11.369015] (-) TimerEvent: {}
+[11.469749] (-) TimerEvent: {}
+[11.570504] (-) TimerEvent: {}
+[11.671234] (-) TimerEvent: {}
+[11.771902] (-) TimerEvent: {}
+[11.872480] (-) TimerEvent: {}
+[11.973216] (-) TimerEvent: {}
+[12.073935] (-) TimerEvent: {}
+[12.174663] (-) TimerEvent: {}
+[12.275349] (-) TimerEvent: {}
+[12.375894] (-) TimerEvent: {}
+[12.476541] (-) TimerEvent: {}
+[12.577272] (-) TimerEvent: {}
+[12.677993] (-) TimerEvent: {}
+[12.778728] (-) TimerEvent: {}
+[12.879438] (-) TimerEvent: {}
+[12.980141] (-) TimerEvent: {}
+[13.080653] (-) TimerEvent: {}
+[13.181163] (-) TimerEvent: {}
+[13.281657] (-) TimerEvent: {}
+[13.382166] (-) TimerEvent: {}
+[13.482907] (-) TimerEvent: {}
+[13.583589] (-) TimerEvent: {}
+[13.684319] (-) TimerEvent: {}
+[13.785028] (-) TimerEvent: {}
+[13.885764] (-) TimerEvent: {}
+[13.986492] (-) TimerEvent: {}
+[14.087192] (-) TimerEvent: {}
+[14.187917] (-) TimerEvent: {}
+[14.288619] (-) TimerEvent: {}
+[14.389294] (-) TimerEvent: {}
+[14.489873] (-) TimerEvent: {}
+[14.590579] (-) TimerEvent: {}
+[14.691168] (-) TimerEvent: {}
+[14.791878] (-) TimerEvent: {}
+[14.892591] (-) TimerEvent: {}
+[14.993308] (-) TimerEvent: {}
+[15.094016] (-) TimerEvent: {}
+[15.194839] (-) TimerEvent: {}
+[15.295547] (-) TimerEvent: {}
+[15.396255] (-) TimerEvent: {}
+[15.496947] (-) TimerEvent: {}
+[15.597633] (-) TimerEvent: {}
+[15.698344] (-) TimerEvent: {}
+[15.798889] (-) TimerEvent: {}
+[15.899440] (-) TimerEvent: {}
+[16.000126] (-) TimerEvent: {}
+[16.100778] (-) TimerEvent: {}
+[16.201367] (-) TimerEvent: {}
+[16.302035] (-) TimerEvent: {}
+[16.402674] (-) TimerEvent: {}
+[16.503374] (-) TimerEvent: {}
+[16.604086] (-) TimerEvent: {}
+[16.704820] (-) TimerEvent: {}
+[16.805546] (-) TimerEvent: {}
+[16.906217] (-) TimerEvent: {}
+[17.006778] (-) TimerEvent: {}
+[17.107309] (-) TimerEvent: {}
+[17.207868] (-) TimerEvent: {}
+[17.308572] (-) TimerEvent: {}
+[17.409296] (-) TimerEvent: {}
+[17.510015] (-) TimerEvent: {}
+[17.610761] (-) TimerEvent: {}
+[17.711477] (-) TimerEvent: {}
+[17.812188] (-) TimerEvent: {}
+[17.912879] (-) TimerEvent: {}
+[18.013386] (-) TimerEvent: {}
+[18.113882] (-) TimerEvent: {}
+[18.214490] (-) TimerEvent: {}
+[18.314998] (-) TimerEvent: {}
+[18.415506] (-) TimerEvent: {}
+[18.516035] (-) TimerEvent: {}
+[18.616545] (-) TimerEvent: {}
+[18.717065] (-) TimerEvent: {}
+[18.817586] (-) TimerEvent: {}
+[18.918156] (-) TimerEvent: {}
+[19.018944] (-) TimerEvent: {}
+[19.034058] (camera_capturer) StdoutLine: {'line': b'[100%] \x1b[32m\x1b[1mLinking CXX executable camera_RGBDT\x1b[0m\n'}
+[19.119118] (-) TimerEvent: {}
+[19.219815] (-) TimerEvent: {}
+[19.320397] (-) TimerEvent: {}
+[19.421064] (-) TimerEvent: {}
+[19.521794] (-) TimerEvent: {}
+[19.622511] (-) TimerEvent: {}
+[19.723028] (-) TimerEvent: {}
+[19.823606] (-) TimerEvent: {}
+[19.924387] (-) TimerEvent: {}
+[20.025062] (-) TimerEvent: {}
+[20.125632] (-) TimerEvent: {}
+[20.177497] (camera_capturer) StdoutLine: {'line': b'[100%] Built target camera_RGBDT\n'}
+[20.197856] (camera_capturer) CommandEnded: {'returncode': 0}
+[20.199395] (camera_capturer) JobProgress: {'identifier': 'camera_capturer', 'progress': 'install'}
+[20.215857] (camera_capturer) Command: {'cmd': ['/usr/bin/cmake', '--install', '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer'], 'cwd': '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer', 'env': OrderedDict([('PYTHON_BASIC_REPL', '1'), ('LESSOPEN', '| /usr/bin/lesspipe %s'), ('LANGUAGE', 'en_US:en'), ('USER', 'pi'), ('LC_TIME', 'en_US.UTF-8'), ('XDG_SESSION_TYPE', 'x11'), ('GIT_ASKPASS', '/usr/share/code/resources/app/extensions/git/dist/askpass.sh'), ('SHLVL', '2'), ('LD_LIBRARY_PATH', '/data/workspace/ws_livox/install/livox_sdk2/lib:/data/workspace/ws_livox/install/livox_ros_driver2/lib:/data/workspace/fast_lio/install/fast_lio/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/aarch64-linux-gnu:/opt/ros/humble/opt/openvdb_vendor/lib:/opt/ros/humble/lib'), ('HOME', '/home/pi'), ('CHROME_DESKTOP', 'code.desktop'), ('OLDPWD', '/home/pi'), ('TERM_PROGRAM_VERSION', '1.108.2'), ('DESKTOP_SESSION', 'ubuntu'), ('JETSON_L4T', '36.4.7'), ('ROS_PYTHON_VERSION', '3'), ('GNOME_SHELL_SESSION_MODE', 'ubuntu'), ('GTK_MODULES', 'gail:atk-bridge'), ('JETSON_MODEL', 'NVIDIA Jetson AGX Orin Developer Kit'), ('VSCODE_GIT_ASKPASS_MAIN', '/usr/share/code/resources/app/extensions/git/dist/askpass-main.js'), ('LC_MONETARY', 'en_US.UTF-8'), ('VSCODE_GIT_ASKPASS_NODE', '/usr/share/code/code'), ('MANAGERPID', '25676'), ('PYDEVD_DISABLE_FILE_VALIDATION', '1'), ('SYSTEMD_EXEC_PID', '26574'), ('BUNDLED_DEBUGPY_PATH', '/home/pi/.vscode/extensions/ms-python.debugpy-2025.18.0-linux-arm64/bundled/libs/debugpy'), ('VSCODE_PYTHON_AUTOACTIVATE_GUARD', '1'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('COLORTERM', 'truecolor'), ('TERMINATOR_DBUS_NAME', 'net.tenshu.Terminator23558193cd9818af7fe4d2c2f5bd9d00f'), ('GIO_LAUNCHED_DESKTOP_FILE_PID', '28481'), ('IM_CONFIG_PHASE', '1'), ('https_proxy', 'http://127.0.0.1:7890'), ('COLCON_PREFIX_PATH', '/data/workspace/ws_livox/install:/data/workspace/fast_lio/install'), ('ROS_DISTRO', 'humble'), ('GTK_IM_MODULE', 'fcitx'), ('LOGNAME', 'pi'), ('JETSON_MODULE', 'NVIDIA Jetson AGX Orin (64GB ram)'), ('JETSON_SERIAL_NUMBER', '1424624317984'), ('http_proxy', 'http://127.0.0.1:7890'), ('JOURNAL_STREAM', '8:226336'), ('_', '/usr/bin/colcon'), ('ROS_VERSION', '2'), ('XDG_SESSION_CLASS', 'user'), ('USERNAME', 'pi'), ('TERM', 'xterm-256color'), ('GNOME_DESKTOP_SESSION_ID', 'this-is-deprecated'), ('FC_FONTATIONS', '1'), ('ROS_LOCALHOST_ONLY', '0'), ('WINDOWPATH', '2'), ('PATH', '/home/pi/anaconda3/bin:/home/pi/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/pi/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/pi/anaconda3/bin:/opt/ros/humble/bin:/home/pi/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin:/home/pi/.vscode/extensions/ms-python.debugpy-2025.18.0-linux-arm64/bundled/scripts/noConfigScripts'), ('SESSION_MANAGER', 'local/ubuntu:@/tmp/.ICE-unix/26094,unix/ubuntu:/tmp/.ICE-unix/26094'), ('INVOCATION_ID', 'e5a2d638b2f643a19a9b2ad103ce440c'), ('PAPERSIZE', 'letter'), ('XDG_MENU_PREFIX', 'gnome-'), ('LC_ADDRESS', 'en_US.UTF-8'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('GDK_BACKEND', 'x11'), ('DISPLAY', ':1'), ('VSCODE_DEBUGPY_ADAPTER_ENDPOINTS', '/home/pi/.vscode/extensions/ms-python.debugpy-2025.18.0-linux-arm64/.noConfigDebugAdapterEndpoints/endpoint-b1d50aa26c43a87e.txt'), ('TERMINATOR_DBUS_PATH', '/net/tenshu/Terminator2'), ('LANG', 'en_US.UTF-8'), ('XDG_CURRENT_DESKTOP', 'ubuntu:GNOME'), ('PYTHONSTARTUP', '/home/pi/.config/Code/User/workspaceStorage/21b85a7173ee5076fd2a7d2c47a3b491/ms-python.python/pythonrc.py'), ('LC_TELEPHONE', 'en_US.UTF-8'), ('XMODIFIERS', '@im=fcitx'), ('XDG_SESSION_DESKTOP', 'ubuntu'), ('XAUTHORITY', '/run/user/1000/gdm/Xauthority'), ('LS_COLORS', 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:'), ('JETSON_SOC', 'tegra234'), ('VSCODE_GIT_IPC_HANDLE', '/run/user/1000/vscode-git-a42853d54e.sock'), ('TERM_PROGRAM', 'vscode'), ('SSH_AGENT_LAUNCHER', 'gnome-keyring'), ('SSH_AUTH_SOCK', '/run/user/1000/keyring/ssh'), ('AMENT_PREFIX_PATH', '/data/workspace/ws_livox/install/livox_ros_driver2:/data/workspace/fast_lio/install/fast_lio:/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LC_NAME', 'en_US.UTF-8'), ('TERMINATOR_UUID', 'urn:uuid:8ac5e1b4-9091-4eac-b1b4-6d47dffe0a3b'), ('QT_ACCESSIBILITY', '1'), ('GDMSESSION', 'ubuntu'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('LC_MEASUREMENT', 'en_US.UTF-8'), ('GPG_AGENT_INFO', '/run/user/1000/gnupg/S.gpg-agent:0:1'), ('LC_IDENTIFICATION', 'en_US.UTF-8'), ('VSCODE_GIT_ASKPASS_EXTRA_ARGS', ''), ('QT_IM_MODULE', 'fcitx'), ('JETSON_CUDA_ARCH_BIN', '8.7'), ('PWD', '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer'), ('LC_ALL', 'en_US.UTF-8'), ('XDG_CONFIG_DIRS', '/etc/xdg/xdg-ubuntu:/etc/xdg'), ('CLUTTER_IM_MODULE', 'xim'), ('XDG_DATA_DIRS', '/usr/share/ubuntu:/usr/share/gnome:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop'), ('PYTHONPATH', '/data/workspace/ws_livox/install/livox_ros_driver2/local/lib/python3.10/dist-packages:/data/workspace/fast_lio/install/fast_lio/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('LC_NUMERIC', 'en_US.UTF-8'), ('LC_PAPER', 'en_US.UTF-8'), ('COLCON', '1'), ('VTE_VERSION', '6800'), ('JETSON_JETPACK', ''), ('CMAKE_PREFIX_PATH', '/data/workspace/ws_livox/install/livox_ros_driver2:/data/workspace/fast_lio/install/fast_lio:/opt/ros/humble'), ('JETSON_P_NUMBER', 'p3701-0005')]), 'shell': False}
+[20.225707] (-) TimerEvent: {}
+[20.231595] (camera_capturer) StdoutLine: {'line': b'-- Install configuration: ""\n'}
+[20.232151] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/camera_capturer/guidestereo_node\n'}
+[20.232391] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/package_run_dependencies/camera_capturer\n'}
+[20.232585] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/parent_prefix_path/camera_capturer\n'}
+[20.232764] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/ament_prefix_path.sh\n'}
+[20.232938] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/ament_prefix_path.dsv\n'}
+[20.233106] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/path.sh\n'}
+[20.233233] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/path.dsv\n'}
+[20.233353] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.bash\n'}
+[20.233498] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.sh\n'}
+[20.233619] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.zsh\n'}
+[20.233817] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.dsv\n'}
+[20.233935] (camera_capturer) StdoutLine: {'line': b'-- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.dsv\n'}
+[20.234048] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/packages/camera_capturer\n'}
+[20.234158] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/cmake/camera_capturerConfig.cmake\n'}
+[20.234300] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/cmake/camera_capturerConfig-version.cmake\n'}
+[20.234441] (camera_capturer) StdoutLine: {'line': b'-- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.xml\n'}
+[20.237759] (camera_capturer) CommandEnded: {'returncode': 0}
+[20.294615] (camera_capturer) JobEnded: {'identifier': 'camera_capturer', 'rc': 0}
+[20.296168] (-) EventReactorShutdown: {}

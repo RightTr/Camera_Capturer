@@ -1,0 +1,81 @@
+[0.023s] Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /home/pi/workspace/cap_ws/src/Camera_Capturer -DCMAKE_INSTALL_PREFIX=/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer
+[0.254s] -- The C compiler identification is GNU 11.4.0
+[0.431s] -- The CXX compiler identification is GNU 11.4.0
+[0.457s] -- Detecting C compiler ABI info
+[0.569s] -- Detecting C compiler ABI info - done
+[0.588s] -- Check for working C compiler: /usr/bin/cc - skipped
+[0.589s] -- Detecting C compile features
+[0.590s] -- Detecting C compile features - done
+[0.599s] -- Detecting CXX compiler ABI info
+[0.719s] -- Detecting CXX compiler ABI info - done
+[0.733s] -- Check for working CXX compiler: /usr/bin/c++ - skipped
+[0.733s] -- Detecting CXX compile features
+[0.735s] -- Detecting CXX compile features - done
+[0.749s] -- Found OpenCV: /usr (found version "4.8.0") 
+[0.880s] -- Found OpenSSL: /usr/lib/aarch64-linux-gnu/libcrypto.so (found version "3.0.2")  
+[1.211s] -- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+[1.419s] -- ROS2 detected
+[1.423s] -- Found rclcpp: 16.0.17 (/opt/ros/humble/share/rclcpp/cmake)
+[1.516s] -- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+[1.532s] -- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)
+[1.553s] -- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+[1.583s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[1.622s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[1.724s] -- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+[1.732s] -- Found rmw_fastrtps_cpp: 6.2.9 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+[1.858s] -- Found FastRTPS: /opt/ros/humble/include  
+[1.923s] -- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[1.945s] -- Looking for pthread.h
+[2.060s] -- Looking for pthread.h - found
+[2.060s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+[2.176s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+[2.178s] -- Found Threads: TRUE  
+[2.334s] -- Found sensor_msgs: 4.9.0 (/opt/ros/humble/share/sensor_msgs/cmake)
+[2.420s] -- Found cv_bridge: 3.2.1 (/opt/ros/humble/share/cv_bridge/cmake)
+[2.542s] -- Configuring done
+[2.587s] -- Generating done
+[2.601s] -- Build files have been written to: /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer
+[2.624s] Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /home/pi/workspace/cap_ws/src/Camera_Capturer -DCMAKE_INSTALL_PREFIX=/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer
+[2.629s] Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[2.711s] [ 33%] [32mBuilding CXX object CMakeFiles/guidestereo.dir/src/guidestereo.cpp.o[0m
+[2.711s] [ 33%] [32mBuilding CXX object CMakeFiles/guidestereo_node.dir/src/guidestereo_ros.cpp.o[0m
+[2.711s] [ 33%] [32mBuilding CXX object CMakeFiles/realsense.dir/src/realsense.cpp.o[0m
+[2.711s] [ 33%] [32mBuilding CXX object CMakeFiles/guidemono.dir/src/guidemono.cpp.o[0m
+[2.715s] [ 41%] [32mBuilding CXX object CMakeFiles/realsense_imu_test.dir/src/realsense_imu_test.cpp.o[0m
+[2.721s] [ 50%] [32mBuilding CXX object CMakeFiles/camera_RGBDT.dir/src/camera_RGBDT.cpp.o[0m
+[4.878s] [ 58%] [32m[1mLinking CXX executable realsense_imu_test[0m
+[5.359s] [ 58%] Built target realsense_imu_test
+[7.352s] [ 66%] [32m[1mLinking CXX executable guidemono[0m
+[7.603s] [ 66%] Built target guidemono
+[7.726s] [ 75%] [32m[1mLinking CXX executable guidestereo[0m
+[7.985s] [ 75%] Built target guidestereo
+[8.685s] [ 83%] [32m[1mLinking CXX executable realsense[0m
+[9.022s] [ 83%] Built target realsense
+[23.417s] [ 91%] [32m[1mLinking CXX executable camera_RGBDT[0m
+[24.587s] [ 91%] Built target camera_RGBDT
+[25.923s] [100%] [32m[1mLinking CXX executable guidestereo_node[0m
+[31.341s] /usr/bin/ld: warning: libopencv_imgcodecs.so.4.5d, needed by /opt/ros/humble/lib/libcv_bridge.so, may conflict with libopencv_imgcodecs.so.408
+[31.347s] /usr/bin/ld: warning: libopencv_imgproc.so.4.5d, needed by /opt/ros/humble/lib/libcv_bridge.so, may conflict with libopencv_imgproc.so.408
+[31.352s] /usr/bin/ld: warning: libopencv_core.so.4.5d, needed by /opt/ros/humble/lib/libcv_bridge.so, may conflict with libopencv_core.so.408
+[32.528s] [100%] Built target guidestereo_node
+[32.550s] Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[32.569s] Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer
+[32.583s] -- Install configuration: ""
+[32.583s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/camera_capturer/guidestereo_node
+[32.595s] -- Set runtime path of "/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/camera_capturer/guidestereo_node" to ""
+[32.595s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/package_run_dependencies/camera_capturer
+[32.596s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/parent_prefix_path/camera_capturer
+[32.596s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/ament_prefix_path.sh
+[32.596s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/ament_prefix_path.dsv
+[32.596s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/path.sh
+[32.597s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/path.dsv
+[32.597s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.bash
+[32.597s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.sh
+[32.597s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.zsh
+[32.597s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.dsv
+[32.598s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.dsv
+[32.598s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/packages/camera_capturer
+[32.598s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/cmake/camera_capturerConfig.cmake
+[32.598s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/cmake/camera_capturerConfig-version.cmake
+[32.598s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.xml
+[32.601s] Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer

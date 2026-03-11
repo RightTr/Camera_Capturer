@@ -1,0 +1,2 @@
+Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '2': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12

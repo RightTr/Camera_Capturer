@@ -1,0 +1,7 @@
+[01m[K/home/pi/workspace/cap_ws/src/Camera_Capturer/src/realsense_imu_test.cpp:28:10:[m[K [01;31m[Kfatal error: [m[Krclcpp/rclcpp.hpp: No such file or directory
+   28 | #include [01;31m[K<rclcpp/rclcpp.hpp>[m[K
+      |          [01;31m[K^~~~~~~~~~~~~~~~~~~[m[K
+compilation terminated.
+gmake[2]: *** [CMakeFiles/realsense_imu_test.dir/build.make:76: CMakeFiles/realsense_imu_test.dir/src/realsense_imu_test.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:173: CMakeFiles/realsense_imu_test.dir/all] Error 2
+gmake: *** [Makefile:146: all] Error 2

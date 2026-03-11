@@ -117,9 +117,6 @@ struct StampedRealSenseFrame {
     long sensor_sec, sensor_microsec;
 };
 
-// -------------------------------------------------------
-// NEW: IMU frame struct
-// -------------------------------------------------------
 struct StampedImuFrame {
     rs2_stream stream_type; // RS2_STREAM_ACCEL or RS2_STREAM_GYRO
     uint64_t host_ns;
@@ -132,20 +129,19 @@ std::ofstream lr_time_stream[2];
 std::ofstream lr_param_stream[2];
 std::ofstream lr_temp_stream[2];
 std::ofstream rs_time_stream;
-std::ofstream accel_stream; 
-std::ofstream gyro_stream;
+std::ofstream imu_stream;
 
 std::mutex lr_mutex[2];
 
 std::mutex lr_queue_mutex[2];
 std::mutex rgbd_queue_mutex;
-std::mutex imu_queue_mutex;         // NEW
+std::mutex imu_queue_mutex;
 std::condition_variable lr_cv[2];
 std::condition_variable rgbd_cv;
-std::condition_variable imu_cv;     // NEW
+std::condition_variable imu_cv;
 std::queue<StampedGuideFrame> lr_output_queue[2];
 std::queue<StampedRealSenseFrame> rgbd_output_queue;
-std::queue<StampedImuFrame> imu_output_queue; // NEW
+std::queue<StampedImuFrame> imu_output_queue;
 
 int lr_fd[2] = { -1, -1 };
 struct buffer *lr_buffers[2] = { nullptr, nullptr };
@@ -157,10 +153,6 @@ struct PwmSyncState {
     std::mutex mutex;
     std::deque<uint64_t> rise_ns_history;
     size_t max_history = 600;
-
-    // Online estimate of the PWM period, updated every time a new edge arrives.
-    // Initialized to 33.333ms (30 Hz). The snap window is set to half this value
-    // so every frame unambiguously belongs to exactly one PWM cycle (Nyquist).
     uint64_t estimated_period_ns = 33333333ULL;
 };
 
@@ -178,30 +170,22 @@ int64_t to_ns_from_sec_usec(long sec, long usec)
     return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(usec) * 1000LL;
 }
 
-// Insert a single rising-edge timestamp. If the gap to the previous edge is
-// larger than 1.5× the estimated period (i.e. one or more edges were missed),
-// fill in synthetic edges spaced by estimated_period_ns so that the history
-// stays dense and alignStampToPwmTimeline never falls back to a stale edge.
 void updatePwmRisingEdge(uint64_t rise_ns)
 {
     std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
 
     if (!g_pwm_sync_state.rise_ns_history.empty()) {
         const uint64_t prev = g_pwm_sync_state.rise_ns_history.back();
-        if (rise_ns <= prev) return; // duplicate or out-of-order, ignore
+        if (rise_ns <= prev) return;
 
         const uint64_t gap = rise_ns - prev;
         const uint64_t period = g_pwm_sync_state.estimated_period_ns;
 
-        // Update period estimate with a low-pass filter (alpha=0.05) when the
-        // gap is close to one period (no missed edge). This tracks slow drift.
         if (gap < static_cast<uint64_t>(period * 1.3)) {
             g_pwm_sync_state.estimated_period_ns =
                 static_cast<uint64_t>(0.95 * period + 0.05 * gap);
         }
 
-        // If gap implies missed edges, fill synthetically so the history has
-        // no holes larger than one period.
         if (gap > static_cast<uint64_t>(period * 1.5)) {
             uint64_t synthetic = prev + period;
             while (synthetic < rise_ns && synthetic < prev + 10 * period) {
@@ -218,11 +202,6 @@ void updatePwmRisingEdge(uint64_t rise_ns)
         g_pwm_sync_state.rise_ns_history.pop_front();
 }
 
-// Snap a timestamp to the nearest preceding PWM rising edge.
-// The acceptance window is half the estimated period so that every frame maps
-// unambiguously to exactly one PWM cycle regardless of camera frame rate.
-// Returns host_ns unchanged only when the history is empty or the timestamp
-// pre-dates all known edges (startup transient).
 uint64_t alignStampToPwmTimeline(uint64_t host_ns, int64_t host_delay_comp_ns = 0)
 {
     int64_t compensated_ns_signed = static_cast<int64_t>(host_ns) - host_delay_comp_ns;
@@ -232,7 +211,6 @@ uint64_t alignStampToPwmTimeline(uint64_t host_ns, int64_t host_delay_comp_ns = 
     std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
     if (g_pwm_sync_state.rise_ns_history.empty()) return host_ns;
 
-    // Find the latest edge that is <= compensated_ns
     auto it = std::upper_bound(
         g_pwm_sync_state.rise_ns_history.begin(),
         g_pwm_sync_state.rise_ns_history.end(),
@@ -242,18 +220,9 @@ uint64_t alignStampToPwmTimeline(uint64_t host_ns, int64_t host_delay_comp_ns = 
 
     const uint64_t snapped_ns = *(it - 1);
     const uint64_t error_ns = compensated_ns - snapped_ns;
-
-    // Accept if within half a PWM period. Frames that genuinely fall in the
-    // second half of a PWM cycle will also snap to the correct (nearest) edge
-    // once synthetic fill-in keeps the history dense.
     const uint64_t half_period = g_pwm_sync_state.estimated_period_ns / 2;
     if (error_ns > half_period) {
-        // Frame is closer to the *next* edge than the previous one.
-        // If that next edge exists in history, snap to it; otherwise fall back.
-        if (it != g_pwm_sync_state.rise_ns_history.end()) {
-            return *it;
-        }
-        // Next edge not yet received — return host_ns as a safe fallback.
+        if (it != g_pwm_sync_state.rise_ns_history.end()) return *it;
         return host_ns;
     }
     return snapped_ns;
@@ -478,13 +447,8 @@ void save_realsense_frame(const StampedRealSenseFrame& frame) {
     cv::imwrite(ss.str(), frame.depth_image_raw);
 }
 
-// -------------------------------------------------------
-// NEW: save one IMU sample to CSV
-// -------------------------------------------------------
 void save_imu_frame(const StampedImuFrame& frame) {
-    std::ofstream& stream = (frame.stream_type == RS2_STREAM_ACCEL) ? accel_stream : gyro_stream;
-    
-    stream
+    imu_stream
         << frame.host_ns << ","
         << frame.sensor_ns << ","
         << (frame.stream_type == RS2_STREAM_ACCEL ? "accel" : "gyro") << ","
@@ -532,9 +496,6 @@ void realsense_consumer() {
     rs_time_stream.close();
 }
 
-// -------------------------------------------------------
-// NEW: IMU consumer thread
-// -------------------------------------------------------
 void imu_consumer() {
     while (!quitFlag.load()) {
         StampedImuFrame frame;
@@ -542,7 +503,6 @@ void imu_consumer() {
             std::unique_lock<std::mutex> lock(imu_queue_mutex);
             imu_cv.wait(lock, [&]{ return !imu_output_queue.empty() || quitFlag.load(); });
             if (quitFlag.load()) {
-                // Drain remaining samples before exit
                 while (!imu_output_queue.empty()) {
                     if (if_save) save_imu_frame(imu_output_queue.front());
                     imu_output_queue.pop();
@@ -556,8 +516,7 @@ void imu_consumer() {
         if (if_save) save_imu_frame(frame);
     }
     std::cout << "Closing IMU stream" << std::endl;
-    accel_stream.close();
-    gyro_stream.close();
+    imu_stream.close();
 }
 
 void save_realsense_intrinsics(const rs2::pipeline_profile& pip_profile, const std::string& output_dir) {
@@ -656,15 +615,9 @@ void prepare_dirs(const std::string& outputdir) {
         lr_temp_stream[0].open(outputdir + "/left/focal_temperature.txt",  std::ios::out);
         lr_temp_stream[1].open(outputdir + "/right/focal_temperature.txt", std::ios::out);
 
-        // 修改这里：分别为 accel 和 gyro 初始化文件流和表头
-        accel_stream.open(outputdir + "/realsense/accel.csv", std::ios::out);
-        if (accel_stream.is_open()) {
-            accel_stream << "host_ns,sensor_ns,type,x,y,z\n";
-        }
-        
-        gyro_stream.open(outputdir + "/realsense/gyro.csv", std::ios::out);
-        if (gyro_stream.is_open()) {
-            gyro_stream << "host_ns,sensor_ns,type,x,y,z\n";
+        imu_stream.open(outputdir + "/realsense/imu.csv", std::ios::out);
+        if (imu_stream.is_open()) {
+            imu_stream << "host_ns,sensor_ns,type,x,y,z\n";
         }
 
         const char* guide_csv_header =
@@ -721,175 +674,200 @@ void guide_producer(int fps, int id)
 }
 
 // -------------------------------------------------------
-// MODIFIED: realsense_producer uses callback mode for IMU+video.
-// The pipeline internally synchronizes color+depth and delivers
-// them as rs2::frameset in the callback — NO rs2::syncer needed.
-// IMU motion frames arrive as individual rs2::motion_frame.
-// This preserves the original timestamp accuracy.
+// realsense_producer
+//
+// Architecture: pipeline (color+depth only) + sensor API (IMU)
+//
+// Root cause of previous failures:
+//   When video+IMU are all added to one rs2::pipeline, the SDK's
+//   internal syncer waits for ALL streams (video @ 60Hz, accel @
+//   100Hz, gyro @ 200Hz) to produce a time-aligned frameset before
+//   releasing anything. Because IMU and video timestamps live on
+//   different hardware clocks, this syncer stalls forever —
+//   poll_for_frames() returns 0 and callbacks fire at most once.
+//
+// Fix:
+//   - rs2::pipeline  → color + depth ONLY  (same clock/rate, syncer works)
+//   - rs2::motion_sensor → accel + gyro opened directly via sensor API.
+//     The sensor-level callback is NOT routed through the pipeline
+//     dispatcher and never stalls, regardless of firmware version.
 // -------------------------------------------------------
 void realsense_producer(const std::string& rs_device)
 {
-    rs2::pipeline pipline;
-    rs2::config cfg;
+    // ---- Find device ----
+    rs2::context ctx;
+    auto devices = ctx.query_devices();
+    if (devices.size() == 0) {
+        std::cerr << "[realsense] No RealSense device found" << std::endl;
+        quitFlag.store(true); imu_cv.notify_all(); rgbd_cv.notify_all(); return;
+    }
+
+    rs2::device dev;
+    bool found = false;
+    for (auto&& d : devices) {
+        std::string sn = d.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+        if (rs_device.empty() || sn == rs_device) { dev = d; found = true; break; }
+    }
+    if (!found) {
+        std::cerr << "[realsense] Device not found: " << rs_device << std::endl;
+        quitFlag.store(true); imu_cv.notify_all(); rgbd_cv.notify_all(); return;
+    }
+
+    // ---- Configure video sensors ----
+    rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
+
+    if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
+        float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
+        depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
+        std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
+    }
+
+    if (realsense_sync) {
+        // Mode 1 = Master: camera outputs sync signal on GPIO pin.
+        // Mode 0 = free-run (default).
+        // Mode 4 = GenLock: requires external HW GPIO trigger —
+        //          video frames NEVER arrive without it.
+        depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, 1);
+        std::cout << "[realsense] Inter-cam sync mode set to 1 (Master)" << std::endl;
+    }
+
+    if (if_save) {
+        float depth_scale = depth_sensor.get_depth_scale();
+        std::ofstream scale_file(outputdir + "/realsense/depth_scale.txt");
+        scale_file << std::fixed << std::setprecision(10) << depth_scale;
+        scale_file.close();
+    }
+
+    rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
+    if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
+        color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+    if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
+        depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+
+    // ---- Open IMU via sensor API (bypasses pipeline dispatcher entirely) ----
+    rs2::sensor motion_sensor;
+    bool has_motion = false;
+    for (auto&& s : dev.query_sensors()) {
+        if (s.is<rs2::motion_sensor>()) { motion_sensor = s; has_motion = true; break; }
+    }
+
+    if (has_motion) {
+        if (motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
+            motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+
+        // Select highest-rate profile for each motion stream
+        std::vector<rs2::stream_profile> motion_profiles;
+        for (rs2_stream st : {RS2_STREAM_ACCEL, RS2_STREAM_GYRO}) {
+            rs2::stream_profile best;
+            int best_fps = 0;
+            for (auto& p : motion_sensor.get_stream_profiles()) {
+                auto mp = p.as<rs2::motion_stream_profile>();
+                if (!mp || mp.stream_type() != st) continue;
+                if (mp.fps() > best_fps) { best_fps = mp.fps(); best = p; }
+            }
+            if (best) motion_profiles.push_back(best);
+        }
+
+        if (!motion_profiles.empty()) {
+            motion_sensor.open(motion_profiles);
+            motion_sensor.start([](rs2::frame f) {
+                // Sensor-level callback: independent of pipeline, never stalls.
+                const rs2_stream st = f.get_profile().stream_type();
+                if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;
+
+                const uint64_t host_ns = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count());
+                const double ts_ms = f.get_timestamp();
+                const uint64_t sensor_ns = (std::isfinite(ts_ms) && ts_ms >= 0.0)
+                    ? static_cast<uint64_t>(ts_ms * 1e6) : host_ns;
+                const rs2_vector d = f.as<rs2::motion_frame>().get_motion_data();
+                {
+                    std::unique_lock<std::mutex> lock(imu_queue_mutex);
+                    if (imu_output_queue.size() < 200)
+                        imu_output_queue.push(
+                            StampedImuFrame{st, host_ns, sensor_ns, d.x, d.y, d.z});
+                }
+                imu_cv.notify_one();
+            });
+            std::cout << "[realsense] IMU sensor started ("
+                      << motion_profiles.size() << " streams)" << std::endl;
+        } else {
+            std::cout << "[realsense] No motion profiles found, IMU disabled" << std::endl;
+            has_motion = false;
+        }
+    } else {
+        std::cout << "[realsense] No motion sensor on device, IMU disabled" << std::endl;
+    }
+
+    // ---- Start video pipeline (color + depth only, NO IMU in config) ----
+    rs2::pipeline pipeline;
+    rs2::config   cfg;
     if (!rs_device.empty()) cfg.enable_device(rs_device);
 
-    rs2::align align_to_color(RS2_STREAM_COLOR);
-    rs2::spatial_filter spatial_filter;
+    const int width = 640, height = 480;
+    cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_BGR8, 60);
+    cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16,  60);
+    // IMU streams intentionally excluded from pipeline config.
+
+    rs2::align           align_to_color(RS2_STREAM_COLOR);
+    rs2::spatial_filter  spatial_filter;
     rs2::temporal_filter temporal_filter;
-    spatial_filter.set_option(RS2_OPTION_FILTER_MAGNITUDE, 2.0f);
+    spatial_filter.set_option(RS2_OPTION_FILTER_MAGNITUDE,    2.0f);
     spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.5f);
     spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 20.0f);
-    spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
-
-    // Queue for video framesets arriving from the callback.
-    // The pipeline already syncs color+depth internally; we just
-    // need to hand the frameset off to the producer thread for
-    // post-processing (align, filter) without blocking the callback.
-    std::queue<rs2::frameset> video_frameset_queue;
-    std::mutex video_fs_mutex;
-    std::condition_variable video_fs_cv;
-    const int MAX_VIDEO_FS_QUEUE = 5;
-
-    // Callback: IMU → imu_output_queue, video frameset → video_frameset_queue.
-    // Keep the callback lightweight; no heavy processing here.
-    auto frame_callback = [&](rs2::frame f) {
-        // --- IMU path ---
-        if (auto motion = f.as<rs2::motion_frame>()) {
-            const rs2_stream st = motion.get_profile().stream_type();
-            if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;
-
-            const auto now = std::chrono::system_clock::now().time_since_epoch();
-            const uint64_t host_ns = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
-
-            const double ts_ms = motion.get_timestamp();
-            const uint64_t sensor_ns = (std::isfinite(ts_ms) && ts_ms >= 0.0)
-                ? static_cast<uint64_t>(ts_ms * 1e6) : host_ns;
-
-            const rs2_vector d = motion.get_motion_data();
-
-            const int MAX_IMU_QUEUE = 200;
-            {
-                std::unique_lock<std::mutex> lock(imu_queue_mutex);
-                // Non-blocking drop policy: if full, skip oldest rather than blocking callback
-                if (imu_output_queue.size() >= MAX_IMU_QUEUE) return;
-                imu_output_queue.push(StampedImuFrame{st, host_ns, sensor_ns, d.x, d.y, d.z});
-            }
-            imu_cv.notify_one();
-            return;
-        }
-
-        // --- Video path ---
-        // With mixed video+IMU, the pipeline delivers color+depth already
-        // synchronized as an rs2::frameset. Cast directly — no syncer needed.
-        if (auto fs = f.as<rs2::frameset>()) {
-            {
-                std::lock_guard<std::mutex> lock(video_fs_mutex);
-                if ((int)video_frameset_queue.size() >= MAX_VIDEO_FS_QUEUE) {
-                    video_frameset_queue.pop(); // drop oldest if falling behind
-                }
-                video_frameset_queue.push(fs);
-            }
-            video_fs_cv.notify_one();
-        }
-    };
+    spatial_filter.set_option(RS2_OPTION_HOLES_FILL,          0);
 
     try {
-        const int width = 640, height = 480;
-        cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_BGR8, 60);
-        cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16, 60);
-        cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F, 100);
-        cfg.enable_stream(RS2_STREAM_GYRO,  RS2_FORMAT_MOTION_XYZ32F, 200);
-
-        rs2::context ctx;
-        auto devices = ctx.query_devices();
-        if (devices.size() == 0) throw std::runtime_error("No RealSense device found");
-
-        rs2::device dev = devices.front();
-        rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
-
-        if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
-            float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
-            depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
-            std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
-        }
-        if (realsense_sync) {
-            depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, 4);
-            std::cout << "[realsense] Sync ON" << std::endl;
-        }
-        if (if_save) {
-            float depth_scale = depth_sensor.get_depth_scale();
-            std::ofstream scale_file(outputdir + "/realsense/depth_scale.txt");
-            scale_file << std::fixed << std::setprecision(10) << depth_scale;
-            scale_file.close();
-        }
-
-        rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
-        if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
-            color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-        if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
-            depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-
-        rs2::pipeline_profile profile = pipline.start(cfg, frame_callback);
+        rs2::pipeline_profile profile = pipeline.start(cfg);
+        std::cout << "[realsense] Video pipeline started. Enabled streams:\n";
+        for (const auto& sp : profile.get_streams())
+            std::cout << "  - " << sp.stream_name() << " @ " << sp.fps() << " Hz\n";
 
         if (if_save) save_realsense_intrinsics(profile, outputdir);
 
-        std::cout << "[realsense] Pipeline started with IMU. Enabled streams:\n";
-        for (const auto& sp : profile.get_streams()) {
-            std::cout << "  - " << sp.stream_name() << " @ " << sp.fps() << " Hz\n";
-        }
-
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
-        quitFlag.store(true);
-        imu_cv.notify_all();
-        rgbd_cv.notify_all();
-        return;
+        if (has_motion) { motion_sensor.stop(); motion_sensor.close(); }
+        quitFlag.store(true); imu_cv.notify_all(); rgbd_cv.notify_all(); return;
     }
 
-    // Producer loop: drain video_frameset_queue, apply post-processing,
-    // push to rgbd_output_queue exactly as the original poll_for_frames loop did.
+    // ---- Video producer loop: poll_for_frames ----
     while (!quitFlag.load()) {
-        rs2::frameset frames;
-        {
-            std::unique_lock<std::mutex> lock(video_fs_mutex);
-            video_fs_cv.wait_for(lock, std::chrono::milliseconds(10),
-                [&]{ return !video_frameset_queue.empty() || quitFlag.load(); });
-            if (quitFlag.load()) break;
-            if (video_frameset_queue.empty()) continue;
-            frames = video_frameset_queue.front();
-            video_frameset_queue.pop();
+        rs2::frameset frameset;
+        if (!pipeline.poll_for_frames(&frameset)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
         }
 
-        frames = align_to_color.process(frames);
-        rs2::video_frame color_frame = frames.get_color_frame();
-        rs2::depth_frame depth_frame = frames.get_depth_frame();
-        if (!color_frame || !depth_frame) continue;
+        rs2::frameset aligned    = align_to_color.process(frameset);
+        rs2::video_frame color_f = aligned.get_color_frame();
+        rs2::depth_frame depth_f = aligned.get_depth_frame();
+        if (!color_f || !depth_f) continue;
 
-        depth_frame = spatial_filter.process(depth_frame);
-        depth_frame = temporal_filter.process(depth_frame);
+        depth_f = spatial_filter.process(depth_f);
+        depth_f = temporal_filter.process(depth_f);
 
-        auto now = std::chrono::system_clock::now();
+        auto now    = std::chrono::system_clock::now();
         auto host_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
         long host_nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(
             now.time_since_epoch() - host_s).count();
 
-        const double rs_ts_ms = color_frame.get_timestamp();
+        const double rs_ts_ms = color_f.get_timestamp();
         if (!std::isfinite(rs_ts_ms) || rs_ts_ms < 0.0) continue;
 
-        const uint64_t sensor_ns = static_cast<uint64_t>(rs_ts_ms * 1.0e6);
-        const long sensor_sec  = static_cast<long>(sensor_ns / 1000000000ULL);
-        const long sensor_usec = static_cast<long>((sensor_ns % 1000000000ULL) / 1000ULL);
+        const uint64_t sensor_ns   = static_cast<uint64_t>(rs_ts_ms * 1.0e6);
+        const long     sensor_sec  = static_cast<long>(sensor_ns / 1000000000ULL);
+        const long     sensor_usec = static_cast<long>((sensor_ns % 1000000000ULL) / 1000ULL);
 
-        const int frame_width  = color_frame.get_width();
-        const int frame_height = color_frame.get_height();
+        const int frame_width  = color_f.get_width();
+        const int frame_height = color_f.get_height();
+        cv::Mat rs_rgb      (cv::Size(frame_width, frame_height), CV_8UC3,  (void*)color_f.get_data());
+        cv::Mat rs_depth_raw(cv::Size(frame_width, frame_height), CV_16UC1, (void*)depth_f.get_data());
 
-        cv::Mat rs_rgb(cv::Size(frame_width, frame_height), CV_8UC3, (void*)color_frame.get_data());
-        cv::Mat rs_depth_raw(cv::Size(frame_width, frame_height), CV_16UC1, (void*)depth_frame.get_data());
-
-        const uint64_t aligned_ns = alignStampToPwmTimeline(sensor_ns, kRealSenseHostDelayCompNs);
-        const long aligned_sec     = static_cast<long>(aligned_ns / 1000000000ULL);
-        const long aligned_nanosec = static_cast<long>(aligned_ns % 1000000000ULL);
+        const uint64_t aligned_ns      = alignStampToPwmTimeline(sensor_ns, kRealSenseHostDelayCompNs);
+        const long     aligned_sec     = static_cast<long>(aligned_ns / 1000000000ULL);
+        const long     aligned_nanosec = static_cast<long>(aligned_ns % 1000000000ULL);
 
         const int MAX_QUEUE_SIZE = 5;
         {
@@ -906,7 +884,11 @@ void realsense_producer(const std::string& rs_device)
         rgbd_cv.notify_one();
     }
 
-    pipline.stop();
+    pipeline.stop();
+    if (has_motion) {
+        motion_sensor.stop();
+        motion_sensor.close();
+    }
 }
 
 void serial_worker(int port_id)
@@ -982,7 +964,7 @@ void signal_handler(int)
 {
     quitFlag.store(true);
     rgbd_cv.notify_all();
-    imu_cv.notify_all(); // NEW
+    imu_cv.notify_all();
     for (int i = 0; i < 2; ++i) {
         lr_cv[i].notify_all();
         serial_cv[i].notify_all();
@@ -1061,12 +1043,12 @@ int main(int argc, char **argv) {
     std::vector<std::thread> consumers;
     for (int i = 0; i < 2; ++i) consumers.emplace_back(guide_consumer, i);
     consumers.emplace_back(realsense_consumer);
-    consumers.emplace_back(imu_consumer); // NEW
+    consumers.emplace_back(imu_consumer);
 
     // Producers
     std::vector<std::thread> producers;
     for (int i = 0; i < 2; ++i) producers.emplace_back(guide_producer, trigger_fps, i);
-    producers.emplace_back(realsense_producer, dev_rs); // now includes IMU
+    producers.emplace_back(realsense_producer, dev_rs);
 
     // Serial
     std::vector<std::thread> serial_worker_threads;
