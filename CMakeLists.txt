@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project(camera_capturer)
 
 find_package(OpenCV REQUIRED)
+find_package(fastcdr REQUIRED)
+find_package(fastrtps REQUIRED)
 find_package(realsense2 REQUIRED)
 
 add_executable(guidemono src/guidemono.cpp)
@@ -29,6 +31,17 @@ target_link_libraries(realsense
     realsense2::realsense2
     )
 target_include_directories(realsense
+    PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+)
+
+add_executable(realsense_imu_test src/realsense_imu_test.cpp)
+target_link_libraries(realsense_imu_test
+    ${OpenCV_LIBS}
+    pthread
+    serial
+    realsense2::realsense2
+)
+target_include_directories(realsense_imu_test
     PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
 )
 
@@ -90,13 +103,29 @@ if(USE_ROS2)
 
     find_package(rclcpp REQUIRED)
     find_package(sensor_msgs REQUIRED)
+    find_package(std_msgs REQUIRED)
     find_package(cv_bridge REQUIRED)
 
     add_executable(guidestereo_node src/guidestereo_ros.cpp)
     ament_target_dependencies(guidestereo_node
         rclcpp
         sensor_msgs
+        std_msgs
         cv_bridge
+    )
+    ament_target_dependencies(realsense
+        rclcpp
+        sensor_msgs
+        std_msgs
+        cv_bridge
+    )
+    ament_target_dependencies(camera_RGBDT
+        rclcpp
+        std_msgs
+    )
+    ament_target_dependencies(realsense_imu_test
+        rclcpp
+        std_msgs
     )
     target_link_libraries(guidestereo_node
         pthread

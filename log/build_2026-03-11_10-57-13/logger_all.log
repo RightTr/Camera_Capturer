@@ -1,0 +1,105 @@
+[0.180s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build']
+[0.180s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=False, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=12, event_handlers=None, ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=None, packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, verb_parser=<colcon_defaults.argument_parser.defaults.DefaultArgumentsDecorator object at 0xffff7fb84e20>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0xffff7fb84910>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0xffff7fb84910>>)
+[0.441s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.442s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.442s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.442s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.442s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.442s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.442s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/pi/workspace/cap_ws/src/Camera_Capturer'
+[0.442s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.443s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.466s] DEBUG:colcon.colcon_core.package_identification:Package '.' with type 'ros.ament_cmake' and name 'camera_capturer'
+[0.466s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[0.466s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[0.466s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[0.466s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[0.466s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[0.500s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) check parameters
+[0.501s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) discover
+[0.527s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 2 installed packages in /data/workspace/ws_livox/install
+[0.527s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 1 installed packages in /data/workspace/fast_lio/install
+[0.529s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 333 installed packages in /opt/ros/humble
+[0.531s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) using defaults
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'cmake_args' from command line to 'None'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'cmake_target' from command line to 'None'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'cmake_clean_cache' from command line to 'False'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'cmake_clean_first' from command line to 'False'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'cmake_force_configure' from command line to 'False'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'ament_cmake_args' from command line to 'None'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'catkin_cmake_args' from command line to 'None'
+[0.596s] Level 5:colcon.colcon_core.verb:set package 'camera_capturer' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.596s] DEBUG:colcon.colcon_core.verb:Building package 'camera_capturer' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer', 'merge_install': False, 'path': '/home/pi/workspace/cap_ws/src/Camera_Capturer', 'symlink_install': False, 'test_result_base': None}
+[0.597s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[0.598s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[0.599s] INFO:colcon.colcon_ros.task.ament_cmake.build:Building ROS package in '/home/pi/workspace/cap_ws/src/Camera_Capturer' with build type 'ament_cmake'
+[0.599s] INFO:colcon.colcon_cmake.task.cmake.build:Building CMake package in '/home/pi/workspace/cap_ws/src/Camera_Capturer'
+[0.602s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[0.602s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.602s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.615s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[0.733s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[0.753s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer
+[0.772s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(camera_capturer)
+[0.774s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer
+[0.779s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer' for CMake module files
+[0.780s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer' for CMake config files
+[0.781s] Level 1:colcon.colcon_core.shell:create_environment_hook('camera_capturer', 'cmake_prefix_path')
+[0.781s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/hook/cmake_prefix_path.ps1'
+[0.783s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/hook/cmake_prefix_path.dsv'
+[0.784s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/hook/cmake_prefix_path.sh'
+[0.786s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib'
+[0.786s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/bin'
+[0.786s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/pkgconfig/camera_capturer.pc'
+[0.787s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/python3.10/site-packages'
+[0.788s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/bin'
+[0.788s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.ps1'
+[0.790s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.dsv'
+[0.792s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.sh'
+[0.794s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.bash'
+[0.796s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.zsh'
+[0.798s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/colcon-core/packages/camera_capturer)
+[0.800s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(camera_capturer)
+[0.801s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer' for CMake module files
+[0.802s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer' for CMake config files
+[0.803s] Level 1:colcon.colcon_core.shell:create_environment_hook('camera_capturer', 'cmake_prefix_path')
+[0.803s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/hook/cmake_prefix_path.ps1'
+[0.805s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/hook/cmake_prefix_path.dsv'
+[0.806s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/hook/cmake_prefix_path.sh'
+[0.808s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib'
+[0.808s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/bin'
+[0.808s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/pkgconfig/camera_capturer.pc'
+[0.809s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/python3.10/site-packages'
+[0.809s] Level 1:colcon.colcon_core.environment:checking '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/bin'
+[0.810s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.ps1'
+[0.811s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.dsv'
+[0.813s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.sh'
+[0.814s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.bash'
+[0.815s] INFO:colcon.colcon_core.shell:Creating package script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.zsh'
+[0.816s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/colcon-core/packages/camera_capturer)
+[0.817s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[0.818s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[0.818s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '0'
+[0.819s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[0.830s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.terminal_notifier': Not used on non-Darwin systems
+[0.830s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.win32': Not used on non-Windows systems
+[0.830s] INFO:colcon.colcon_notification.desktop_notification:Sending desktop notification using 'notify2'
+[0.856s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[0.857s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/local_setup.ps1'
+[0.860s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/_local_setup_util_ps1.py'
+[0.864s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/setup.ps1'
+[0.867s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/local_setup.sh'
+[0.870s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/_local_setup_util_sh.py'
+[0.871s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/setup.sh'
+[0.874s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/local_setup.bash'
+[0.876s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/setup.bash'
+[0.878s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/local_setup.zsh'
+[0.879s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/pi/workspace/cap_ws/src/Camera_Capturer/install/setup.zsh'

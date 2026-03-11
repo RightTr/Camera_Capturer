@@ -1,0 +1,8 @@
+source;share/camera_capturer/hook/cmake_prefix_path.ps1
+source;share/camera_capturer/hook/cmake_prefix_path.dsv
+source;share/camera_capturer/hook/cmake_prefix_path.sh
+source;share/camera_capturer/local_setup.bash
+source;share/camera_capturer/local_setup.dsv
+source;share/camera_capturer/local_setup.ps1
+source;share/camera_capturer/local_setup.sh
+source;share/camera_capturer/local_setup.zsh

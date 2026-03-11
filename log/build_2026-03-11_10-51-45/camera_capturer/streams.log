@@ -1,0 +1,30 @@
+[0.018s] Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[0.097s] [35m[1mConsolidate compiler generated dependencies of target realsense_imu_test[0m
+[0.106s] [ 16%] Built target guidemono
+[0.113s] [ 33%] Built target guidestereo
+[0.113s] [ 50%] Built target camera_RGBDT
+[0.113s] [ 66%] Built target realsense
+[0.116s] [ 83%] Built target guidestereo_node
+[0.134s] [ 91%] [32mBuilding CXX object CMakeFiles/realsense_imu_test.dir/src/realsense_imu_test.cpp.o[0m
+[2.149s] [100%] [32m[1mLinking CXX executable realsense_imu_test[0m
+[2.512s] [100%] Built target realsense_imu_test
+[2.535s] Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer -- -j12 -l12
+[2.555s] Invoking command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer
+[2.566s] -- Install configuration: ""
+[2.567s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/lib/camera_capturer/guidestereo_node
+[2.567s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/package_run_dependencies/camera_capturer
+[2.568s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/parent_prefix_path/camera_capturer
+[2.568s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/ament_prefix_path.sh
+[2.568s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/ament_prefix_path.dsv
+[2.568s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/path.sh
+[2.569s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/environment/path.dsv
+[2.569s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.bash
+[2.569s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.sh
+[2.569s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.zsh
+[2.570s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/local_setup.dsv
+[2.571s] -- Installing: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.dsv
+[2.573s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/ament_index/resource_index/packages/camera_capturer
+[2.573s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/cmake/camera_capturerConfig.cmake
+[2.574s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/cmake/camera_capturerConfig-version.cmake
+[2.574s] -- Up-to-date: /home/pi/workspace/cap_ws/src/Camera_Capturer/install/camera_capturer/share/camera_capturer/package.xml
+[2.575s] Invoked command in '/home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/pi/workspace/cap_ws/src/Camera_Capturer/build/camera_capturer

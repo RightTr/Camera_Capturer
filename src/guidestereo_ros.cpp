@@ -13,7 +13,9 @@
 #include <atomic>
 #include <ctime>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <iomanip>
 
 #include <filesystem>
@@ -31,10 +33,12 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/UInt64.h>
 #elif defined(USE_ROS2)
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/u_int64.hpp>
 #endif
 
 #ifdef USE_ROS1
@@ -144,6 +148,51 @@ struct buffer *lr_buffers[2] = { nullptr, nullptr };
 
 std::mutex serial_mutex[2];
 std::condition_variable serial_cv[2];
+
+struct PwmSyncState {
+    std::mutex mutex;
+    uint64_t last_rise_ns = 0;
+    double period_ns = 0.0;
+};
+
+PwmSyncState g_pwm_sync_state;
+
+void updatePwmRisingEdge(uint64_t rise_ns)
+{
+    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
+    if (g_pwm_sync_state.last_rise_ns > 0 && rise_ns > g_pwm_sync_state.last_rise_ns) {
+        const uint64_t raw_period = rise_ns - g_pwm_sync_state.last_rise_ns;
+        // Reject obvious outliers to keep the estimated period stable.
+        if (raw_period > 1000000ULL && raw_period < 1000000000ULL) {
+            if (g_pwm_sync_state.period_ns <= 0.0) {
+                g_pwm_sync_state.period_ns = static_cast<double>(raw_period);
+            } else {
+                g_pwm_sync_state.period_ns =
+                    0.9 * g_pwm_sync_state.period_ns + 0.1 * static_cast<double>(raw_period);
+            }
+        }
+    }
+    g_pwm_sync_state.last_rise_ns = rise_ns;
+}
+
+uint64_t alignStampToPwmTimeline(uint64_t host_ns)
+{
+    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
+    if (g_pwm_sync_state.last_rise_ns == 0 || g_pwm_sync_state.period_ns <= 0.0) {
+        return host_ns;
+    }
+
+    const double period = g_pwm_sync_state.period_ns;
+    const double nearest_index =
+        std::llround((static_cast<double>(host_ns) - static_cast<double>(g_pwm_sync_state.last_rise_ns)) / period);
+    const double aligned_ns_d = static_cast<double>(g_pwm_sync_state.last_rise_ns) + nearest_index * period;
+    const double error_ns = std::abs(static_cast<double>(host_ns) - aligned_ns_d);
+
+    if (error_ns > 0.6 * period || aligned_ns_d < 0.0) {
+        return host_ns;
+    }
+    return static_cast<uint64_t>(aligned_ns_d);
+}
 
 std::string cameraName(int cam_id) {
     if (cam_id == 0) {
@@ -281,14 +330,23 @@ void publisher(int id, const ImagePublisher& image_pub, const ImagePublisher& te
         }
         lr_cv[id].notify_one();  // Notify producers that space is available in the queue
 
+        const uint64_t host_ns =
+            static_cast<uint64_t>(frame.host_sec) * 1000000000ULL +
+            static_cast<uint64_t>(frame.host_nanosec);
+        const uint64_t aligned_ns = alignStampToPwmTimeline(host_ns);
+        const uint32_t stamp_sec = static_cast<uint32_t>(aligned_ns / 1000000000ULL);
+        const uint32_t stamp_nsec = static_cast<uint32_t>(aligned_ns % 1000000000ULL);
+
         #ifdef USE_ROS1
             ImageMsgPtr img_msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", frame.gray_image).toImageMsg();
-            img_msg->header.stamp.sec = frame.host_sec;
-            img_msg->header.stamp.nsec = frame.host_nanosec;
+            img_msg->header.stamp.sec = stamp_sec;
+            img_msg->header.stamp.nsec = stamp_nsec;
+            img_msg->header.frame_id = (id == 0) ? "guide_left" : "guide_right";
 
             ImageMsgPtr temp_msg = cv_bridge::CvImage(std_msgs::Header(), "32FC1", frame.temperature_celsius).toImageMsg();
-            temp_msg->header.stamp.sec = frame.host_sec;
-            temp_msg->header.stamp.nsec = frame.host_nanosec;
+            temp_msg->header.stamp.sec = stamp_sec;
+            temp_msg->header.stamp.nsec = stamp_nsec;
+            temp_msg->header.frame_id = (id == 0) ? "guide_left" : "guide_right";
             image_pub.publish(img_msg);
             temp_pub.publish(temp_msg);
         #elif defined(USE_ROS2)
@@ -299,9 +357,9 @@ void publisher(int id, const ImagePublisher& image_pub, const ImagePublisher& te
                 frame.gray_image
             ).toImageMsg();
 
-            img_msg->header.stamp.sec = frame.host_sec;
-            img_msg->header.stamp.nanosec = frame.host_nanosec;
-            img_msg->header.frame_id = "camera";
+            img_msg->header.stamp.sec = static_cast<int32_t>(stamp_sec);
+            img_msg->header.stamp.nanosec = stamp_nsec;
+            img_msg->header.frame_id = (id == 0) ? "guide_left" : "guide_right";
 
             ImageMsgPtr temp_msg =
             cv_bridge::CvImage(
@@ -310,9 +368,9 @@ void publisher(int id, const ImagePublisher& image_pub, const ImagePublisher& te
                 frame.temperature_celsius
             ).toImageMsg();
 
-            temp_msg->header.stamp.sec = frame.host_sec;
-            temp_msg->header.stamp.nanosec = frame.host_nanosec;
-            temp_msg->header.frame_id = "camera";
+            temp_msg->header.stamp.sec = static_cast<int32_t>(stamp_sec);
+            temp_msg->header.stamp.nanosec = stamp_nsec;
+            temp_msg->header.frame_id = (id == 0) ? "guide_left" : "guide_right";
 
             image_pub->publish(*img_msg);
             temp_pub->publish(*temp_msg);
@@ -482,7 +540,7 @@ void serial_worker(int port_id)
                 serials[port_id].Write(sync_on);
                 #ifdef USE_ROS1
                 ROS_INFO("Port %d write SYNC_ON", port_id);
-                #elif define(USE_ROS2)
+                #elif defined(USE_ROS2)
                 RCLCPP_INFO(rclcpp::get_logger("camera_capturer"), "Port %d write SYNC_ON", port_id);
                 #endif
                 break;
@@ -490,7 +548,7 @@ void serial_worker(int port_id)
                 serials[port_id].Write(sync_off);
                 #ifdef USE_ROS1
                 ROS_INFO("Port %d write SYNC_OFF", port_id);
-                #elif define(USE_ROS2)
+                #elif defined(USE_ROS2)
                 RCLCPP_INFO(rclcpp::get_logger("camera_capturer"), "Port %d write SYNC_OFF", port_id);
                 #endif
                 break;
@@ -575,6 +633,10 @@ int main(int argc, char **argv) {
                 serial_cv[i].notify_one();
             }
         });
+    ros::Subscriber pwm_rise_sub = nh.subscribe<std_msgs::UInt64>("pwm_capture/rising_edge_time_ns", 50,
+        [&](const std_msgs::UInt64::ConstPtr& msg) {
+            updatePwmRisingEdge(msg->data);
+        });
 
     #elif defined(USE_ROS2)
     rclcpp::init(argc, argv);
@@ -593,6 +655,11 @@ int main(int argc, char **argv) {
                 serial_cmd[i].store(msg->data ? SerialCmd::SYNC_ON : SerialCmd::SYNC_OFF);
                 serial_cv[i].notify_one();
             }
+        });
+    auto pwm_rise_sub = node->create_subscription<std_msgs::msg::UInt64>(
+        "pwm_capture/rising_edge_time_ns", 50,
+        [&](const std_msgs::msg::UInt64::SharedPtr msg) {
+            updatePwmRisingEdge(msg->data);
         });
     #endif
 
