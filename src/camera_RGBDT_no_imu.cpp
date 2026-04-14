@@ -17,7 +17,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <iomanip>
 
 #include <filesystem>
@@ -30,10 +29,6 @@
 #include <librealsense2/rs.hpp>
 #include <libserial/SerialPort.h>
 #include <signal.h>
-#ifdef USE_ROS2
-#include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/u_int64.hpp>
-#endif
 
 int if_save = 0;
 int realsense_sync = 0;
@@ -99,21 +94,19 @@ struct ParamData {
     uint16_t region_avg_temp; 
 };
 
-struct StampedGuideFrame  {
+struct StampedGuideFrame {
     int cam_id;
     cv::Mat gray_image;
     cv::Mat temperature_celsius;
     ParamData param_data;
     long host_sec, host_nanosec;
-    long aligned_sec, aligned_nanosec;
     long sensor_sec, sensor_microsec;
 };
 
-struct StampedRealSenseFrame  {
+struct StampedRealSenseFrame {
     cv::Mat color_image;
     cv::Mat depth_image_raw;
     long host_sec, host_nanosec;
-    long aligned_sec, aligned_nanosec;
     long sensor_sec, sensor_microsec;
 };
 
@@ -140,19 +133,6 @@ struct buffer *lr_buffers[2] = { nullptr, nullptr };
 std::mutex serial_mutex[2];
 std::condition_variable serial_cv[2];
 
-struct PwmSyncState {
-    std::mutex mutex;
-    std::deque<uint64_t> rise_ns_history;
-    size_t max_history = 600;
-    uint64_t max_snap_error_ns = 12000000ULL; // 12 ms
-};
-
-PwmSyncState g_pwm_sync_state;
-// Per-stream host timestamp delay compensation before snapping to PWM timeline.
-// Positive value means host timestamp is later than true exposure time.
-constexpr int64_t kGuideHostDelayCompNs = 0;
-constexpr int64_t kRealSenseHostDelayCompNs = 0;
-
 int64_t to_ns_from_sec_nsec(long sec, long nsec)
 {
     return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(nsec);
@@ -161,50 +141,6 @@ int64_t to_ns_from_sec_nsec(long sec, long nsec)
 int64_t to_ns_from_sec_usec(long sec, long usec)
 {
     return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(usec) * 1000LL;
-}
-
-void updatePwmRisingEdge(uint64_t rise_ns)
-{
-    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
-    if (!g_pwm_sync_state.rise_ns_history.empty() &&
-        rise_ns <= g_pwm_sync_state.rise_ns_history.back()) {
-        return;
-    }
-    g_pwm_sync_state.rise_ns_history.push_back(rise_ns);
-    while (g_pwm_sync_state.rise_ns_history.size() > g_pwm_sync_state.max_history) {
-        g_pwm_sync_state.rise_ns_history.pop_front();
-    }
-}
-
-uint64_t alignStampToPwmTimeline(uint64_t host_ns, int64_t host_delay_comp_ns = 0)
-{
-    int64_t compensated_ns_signed = static_cast<int64_t>(host_ns) - host_delay_comp_ns;
-    if (compensated_ns_signed < 0) {
-        compensated_ns_signed = 0;
-    }
-    const uint64_t compensated_ns = static_cast<uint64_t>(compensated_ns_signed);
-
-    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
-    if (g_pwm_sync_state.rise_ns_history.empty()) {
-        return host_ns;
-    }
-
-    // Use previous rising edge only (edge <= compensated host time).
-    auto it = std::upper_bound(
-        g_pwm_sync_state.rise_ns_history.begin(),
-        g_pwm_sync_state.rise_ns_history.end(),
-        compensated_ns);
-
-    if (it == g_pwm_sync_state.rise_ns_history.begin()) {
-        return host_ns;
-    }
-
-    const uint64_t snapped_ns = *(it - 1);
-    const uint64_t error_ns = compensated_ns - snapped_ns;
-    if (error_ns > g_pwm_sync_state.max_snap_error_ns) {
-        return host_ns;
-    }
-    return snapped_ns;
 }
 
 std::string cameraName(int cam_id) {
@@ -365,101 +301,77 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
 
     auto sec = std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch());
     auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch() - sec).count();
-    const uint64_t host_ns =
-        static_cast<uint64_t>(sec.count()) * 1000000000ULL +
-        static_cast<uint64_t>(nanosec);
-    const uint64_t aligned_ns = alignStampToPwmTimeline(host_ns, kGuideHostDelayCompNs);
-    const long aligned_sec = static_cast<long>(aligned_ns / 1000000000ULL);
-    const long aligned_nanosec = static_cast<long>(aligned_ns % 1000000000ULL);
-
-    const int MAX_QUEUE_SIZE = 5;   // Max number of items in the queue
+    const int MAX_QUEUE_SIZE = 5;
     {
         std::unique_lock<std::mutex> lock(lr_queue_mutex[cam_id]);
         while (lr_output_queue[cam_id].size() >= MAX_QUEUE_SIZE) {
-            // Wait until there is space in the queue
             std::cout << "Producer " << cam_id << ": Queue is full, waiting...\n";
-            lr_cv[cam_id].wait(lock);  // Wait until a consumer consumes an item
+            lr_cv[cam_id].wait(lock);
         }
         lr_output_queue[cam_id].emplace(StampedGuideFrame{
-            cam_id,
-            gray_image,
-            temperature_celsius,
-            param_data,
-            sec.count(),
-            nanosec,
-            aligned_sec,
-            aligned_nanosec,
-            tv.tv_sec,
-            tv.tv_usec
+            cam_id, gray_image, temperature_celsius, param_data,
+            sec.count(), nanosec,
+            tv.tv_sec, tv.tv_usec
         });
     }
-    lr_cv[cam_id].notify_one();  // Notify consumers that new data is available
+    lr_cv[cam_id].notify_one();
 
 }
 
 void save_guide_frame(const StampedGuideFrame& frame) {
-    const int64_t aligned_ns = to_ns_from_sec_nsec(frame.aligned_sec, frame.aligned_nanosec);
     const int64_t host_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
     const int64_t sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-    const int64_t host_minus_aligned_ns = host_ns - aligned_ns;
 
     lr_time_stream[frame.cam_id]
-        << aligned_ns << ","
-        << sensor_ns << ","
-        << host_ns << ","
-        << host_minus_aligned_ns
+        << sensor_ns << "," << host_ns
         << std::endl;
 
-    lr_param_stream[frame.cam_id] << frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec
-                 << "," << frame.param_data.humidity
-                 << "," << frame.param_data.distance_x10
-                 << "," << frame.param_data.emissivity
-                 << "," << frame.param_data.reflected_temp
-                 << "," << frame.param_data.shutter_flag
-                 << "," << frame.param_data.hot_x
-                 << "," << frame.param_data.hot_y
-                 << "," << frame.param_data.hot_temp
-                 << "," << frame.param_data.cold_x
-                 << "," << frame.param_data.cold_y
-                 << "," << frame.param_data.cold_temp
-                 << "," << frame.param_data.mark_x
-                 << "," << frame.param_data.mark_y
-                 << "," << frame.param_data.mark_temp
-                 << "," << frame.param_data.region_avg_temp
-                 << std::endl;
+    lr_param_stream[frame.cam_id]
+        << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
+        << "," << frame.param_data.humidity
+        << "," << frame.param_data.distance_x10
+        << "," << frame.param_data.emissivity
+        << "," << frame.param_data.reflected_temp
+        << "," << frame.param_data.shutter_flag
+        << "," << frame.param_data.hot_x
+        << "," << frame.param_data.hot_y
+        << "," << frame.param_data.hot_temp
+        << "," << frame.param_data.cold_x
+        << "," << frame.param_data.cold_y
+        << "," << frame.param_data.cold_temp
+        << "," << frame.param_data.mark_x
+        << "," << frame.param_data.mark_y
+        << "," << frame.param_data.mark_temp
+        << "," << frame.param_data.region_avg_temp
+        << std::endl;
 
     std::ostringstream ss;
-    ss << outputdir << "/" << cameraName(frame.cam_id) << "/image/" << 
-        frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+    ss << outputdir << "/" << cameraName(frame.cam_id) << "/image/"
+       << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ".png";
     cv::imwrite(ss.str(), frame.gray_image);
 
     ss.str(""); ss.clear();
-    ss << outputdir << "/" << cameraName(frame.cam_id) << "/temperature/" << 
-        frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+    ss << outputdir << "/" << cameraName(frame.cam_id) << "/temperature/"
+       << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ".png";
     saveCv32FAs16BitPNG(frame.temperature_celsius, ss.str());
 }
 
-void save_realsense_frame(const StampedRealSenseFrame& frame){
-    const int64_t aligned_ns = to_ns_from_sec_nsec(frame.aligned_sec, frame.aligned_nanosec);
+void save_realsense_frame(const StampedRealSenseFrame& frame) {
     const int64_t host_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
     const int64_t sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-    const int64_t sensor_minus_aligned_ns = sensor_ns - aligned_ns;
 
     rs_time_stream
-        << aligned_ns << ","
-        << sensor_ns << ","
-        << host_ns << ","
-        << sensor_minus_aligned_ns
+        << sensor_ns << "," << host_ns
         << std::endl;
 
     std::ostringstream ss;
-    ss << outputdir  << "/realsense/rgb/" <<
-        frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+    ss << outputdir << "/realsense/rgb/"
+       << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << "000.png";
     cv::imwrite(ss.str(), frame.color_image);
 
     ss.str(""); ss.clear();
-    ss << outputdir << "/realsense/depth_raw/" << 
-        frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+    ss << outputdir << "/realsense/depth_raw/"
+       << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << "000.png";
     cv::imwrite(ss.str(), frame.depth_image_raw);
 }
 
@@ -634,23 +546,8 @@ void prepare_dirs(const std::string& outputdir) {
         lr_temp_stream[0].open(outputdir + "/left/focal_temperature.txt",  std::ios::out);
         lr_temp_stream[1].open(outputdir + "/right/focal_temperature.txt", std::ios::out);
 
-        // 热红外：sensor = v4l2内核DMA时间戳，与host同域
-        // 对齐质量看 sensor_minus_aligned（预期 +2~8ms，固定）
-        // host_minus_aligned 仅供参考（预期 +5~15ms）
-        const char* guide_csv_header =
-            "aligned_ns,"
-            "sensor_ns,"
-            "host_ns,"
-            "host_minus_aligned_ns\n";
-
-        // RealSense：sensor = GLOBAL_TIME校正后的曝光时刻
-        // 对齐质量看 sensor_minus_aligned（预期 +8~12ms，固定）
-        // host_minus_aligned 是USB+SDK流水线延迟（预期 +45~55ms，不反映对齐质量）
-        const char* rs_csv_header =
-            "aligned_ns,"
-            "sensor_ns,"
-            "host_ns,"
-            "sensor_minus_aligned_ns\n";
+        const char* guide_csv_header = "sensor_ns,host_ns\n";
+        const char* rs_csv_header   = "sensor_ns,host_ns\n";
 
         lr_time_stream[0] << guide_csv_header;
         lr_time_stream[1] << guide_csv_header;
@@ -714,133 +611,127 @@ void guide_producer(int fps, int id)
     close(lr_fd[id]);
 }
 
-void realsense_producer(const std::string& rs_device){
-    rs2::pipeline pipline;
-    rs2::config cfg;
+void realsense_producer(const std::string& rs_device)
+{
+    rs2::context ctx;
+    auto devices = ctx.query_devices();
+    if (devices.size() == 0) {
+        std::cerr << "[realsense] No RealSense device found" << std::endl;
+        quitFlag.store(true); rgbd_cv.notify_all(); return;
+    }
+
+    rs2::device dev;
+    bool found = false;
+    for (auto&& d : devices) {
+        std::string sn = d.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+        std::cout << "[realsense] Found device SN=" << sn
+                  << "  fw=" << d.get_info(RS2_CAMERA_INFO_FIRMWARE_VERSION) << std::endl;
+        if (rs_device.empty() || sn == rs_device) { dev = d; found = true; break; }
+    }
+    if (!found) {
+        std::cerr << "[realsense] Device not found: " << rs_device << std::endl;
+        quitFlag.store(true); rgbd_cv.notify_all(); return;
+    }
+
+    rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
+
+    if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
+        float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
+        depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
+        std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
+    }
+
+    if (realsense_sync) {
+        depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, 1);
+        std::cout << "[realsense] Inter-cam sync mode set to 1 (Master)" << std::endl;
+    }
+
+    if (if_save) {
+        float depth_scale = depth_sensor.get_depth_scale();
+        std::ofstream scale_file(outputdir + "/realsense/depth_scale.txt");
+        scale_file << std::fixed << std::setprecision(10) << depth_scale;
+        scale_file.close();
+    }
+
+    rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
+    if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
+        color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+    if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
+        depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+
+    rs2::pipeline pipeline;
+    rs2::config   cfg;
     if (!rs_device.empty()) cfg.enable_device(rs_device);
 
-    // --- Declare ADVANCED post-processing blocks ---
-    rs2::align align(RS2_STREAM_COLOR);
-    rs2::spatial_filter spatial_filter;
+    const int width = 640, height = 480;
+    cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_BGR8, 60);
+    cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16,  60);
+
+    rs2::align           align_to_color(RS2_STREAM_COLOR);
+    rs2::spatial_filter  spatial_filter;
     rs2::temporal_filter temporal_filter;
-    
-    // --- Configure the Spatial Filter ---
-    // Hole filling is disabled on the spatial filter.
-    spatial_filter.set_option(RS2_OPTION_FILTER_MAGNITUDE, 2.0f);
+    spatial_filter.set_option(RS2_OPTION_FILTER_MAGNITUDE,    2.0f);
     spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.5f);
     spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 20.0f);
-    spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
+    spatial_filter.set_option(RS2_OPTION_HOLES_FILL,          0);
 
     try {
-        const int width = 640;
-        const int height = 480;
-        cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_BGR8, 60);
-        cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16, 60);
-        
-        rs2::context ctx;
-        auto devices = ctx.query_devices();
-        if (devices.size() == 0) {
-            throw std::runtime_error("No RealSense device found");
-        }
+        rs2::pipeline_profile profile = pipeline.start(cfg);
+        std::cout << "[realsense] Video pipeline started. Enabled streams:\n";
+        for (const auto& sp : profile.get_streams())
+            std::cout << "  - " << sp.stream_name() << " @ " << sp.fps() << " Hz\n";
 
-        rs2::device dev = devices.front();
-        rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
-
-        if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
-            float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
-            depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
-            std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
-        }
-
-        if (realsense_sync) {
-            depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, 4);
-            std::cout << "[realsense] Sync ON" << std::endl;
-        }
-        
-        if(if_save){
-            float depth_scale = depth_sensor.get_depth_scale();
-            std::ofstream scale_file(outputdir + "/realsense/depth_scale.txt");
-            scale_file << std::fixed << std::setprecision(10) << depth_scale;
-            scale_file.close();
-        }
-
-        // 在 pipeline.start(cfg) 之前加这一行
-        rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
-        if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-            color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-        }
-        if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-            depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-        }
-        
-        rs2::pipeline_profile profile = pipline.start(cfg);
-
-        if(if_save) save_realsense_intrinsics(profile, outputdir);
+        if (if_save) save_realsense_intrinsics(profile, outputdir);
 
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
-        quitFlag.store(true);
+        quitFlag.store(true); rgbd_cv.notify_all(); return;
     }
+
     while (!quitFlag.load()) {
-        rs2::frameset frames;
-        if (!pipline.poll_for_frames(&frames)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        rs2::frameset frameset;
+        if (!pipeline.poll_for_frames(&frameset)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
 
-        frames = align.process(frames);
+        rs2::frameset aligned    = align_to_color.process(frameset);
+        rs2::video_frame color_f = aligned.get_color_frame();
+        rs2::depth_frame depth_f = aligned.get_depth_frame();
+        if (!color_f || !depth_f) continue;
 
-        rs2::video_frame color_frame = frames.get_color_frame();
-        rs2::depth_frame depth_frame = frames.get_depth_frame();
-        if(quitFlag.load()) break;
-        if (!color_frame || !depth_frame) continue;
+        depth_f = spatial_filter.process(depth_f);
+        depth_f = temporal_filter.process(depth_f);
 
-        depth_frame = spatial_filter.process(depth_frame);
-        depth_frame = temporal_filter.process(depth_frame);
-
-        // Host receive time is kept for diagnostics only.
-        auto now = std::chrono::system_clock::now();
+        auto now    = std::chrono::system_clock::now();
         auto host_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
         long host_nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(
             now.time_since_epoch() - host_s).count();
 
-        // Sensor global timestamp (ms) from RealSense frame metadata.
-        const double rs_ts_ms = color_frame.get_timestamp();
-        if (!std::isfinite(rs_ts_ms) || rs_ts_ms < 0.0) {
-            continue;
-        }
-        const uint64_t sensor_ns = static_cast<uint64_t>(rs_ts_ms * 1.0e6);
-        const long sensor_sec = static_cast<long>(sensor_ns / 1000000000ULL);
-        const long sensor_usec = static_cast<long>((sensor_ns % 1000000000ULL) / 1000ULL);
-        
-        const int frame_width = color_frame.get_width();
-        const int frame_height = color_frame.get_height();
-        
-        cv::Mat rs_rgb(cv::Size(frame_width, frame_height), CV_8UC3, (void*)color_frame.get_data());
-        cv::Mat rs_depth_raw(cv::Size(frame_width, frame_height), CV_16UC1, (void*)depth_frame.get_data());
+        const double rs_ts_ms = color_f.get_timestamp();
+        if (!std::isfinite(rs_ts_ms) || rs_ts_ms < 0.0) continue;
 
-        // Snap using sensor time instead of host receive time to avoid poll/sleep jitter.
-        const uint64_t aligned_ns = alignStampToPwmTimeline(sensor_ns, kRealSenseHostDelayCompNs);
-        const long aligned_sec = static_cast<long>(aligned_ns / 1000000000ULL);
-        const long aligned_nanosec = static_cast<long>(aligned_ns % 1000000000ULL);
+        const uint64_t sensor_ns   = static_cast<uint64_t>(rs_ts_ms * 1.0e6);
+        const long     sensor_sec  = static_cast<long>(sensor_ns / 1000000000ULL);
+        const long     sensor_usec = static_cast<long>((sensor_ns % 1000000000ULL) / 1000ULL);
+
+        const int fw = color_f.get_width(), fh = color_f.get_height();
+        cv::Mat rs_rgb  (cv::Size(fw, fh), CV_8UC3,  (void*)color_f.get_data());
+        cv::Mat rs_depth(cv::Size(fw, fh), CV_16UC1, (void*)depth_f.get_data());
 
         const int MAX_QUEUE_SIZE = 5;
         {
             std::unique_lock<std::mutex> lock(rgbd_queue_mutex);
-            rgbd_cv.wait(lock, [&]{return rgbd_output_queue.size() < MAX_QUEUE_SIZE;});
+            rgbd_cv.wait(lock, [&]{ return rgbd_output_queue.size() < MAX_QUEUE_SIZE || quitFlag.load(); });
+            if (quitFlag.load()) break;
             rgbd_output_queue.emplace(StampedRealSenseFrame{
-                rs_rgb.clone(),
-                rs_depth_raw.clone(),
-                host_s.count(),
-                host_nanosec,
-                aligned_sec,
-                aligned_nanosec,
-                sensor_sec,
-                sensor_usec});
+                rs_rgb.clone(), rs_depth.clone(),
+                host_s.count(), host_nanosec,
+                sensor_sec, sensor_usec});
         }
         rgbd_cv.notify_one();
     }
-    pipline.stop();
+    pipeline.stop();
 }
 
 void serial_worker(int port_id)
@@ -997,26 +888,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-#ifdef USE_ROS2
-    rclcpp::init(argc, argv);
-    auto pwm_sync_node = rclcpp::Node::make_shared("camera_rgbdt_pwm_sync");
-    auto pwm_topic = pwm_sync_node->declare_parameter<std::string>(
-        "pwm_topic", "pwm_capture/rising_edge_time_ns");
-    auto pwm_sub = pwm_sync_node->create_subscription<std_msgs::msg::UInt64>(
-        pwm_topic, 200,
-        [](const std_msgs::msg::UInt64::SharedPtr msg) {
-            updatePwmRisingEdge(msg->data);
-        });
-
-    rclcpp::executors::SingleThreadedExecutor pwm_executor;
-    pwm_executor.add_node(pwm_sync_node);
-    std::thread pwm_sync_t([&]() {
-        while (!quitFlag.load() && rclcpp::ok()) {
-            pwm_executor.spin_some();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-    });
-#endif
 
     std::vector<std::thread> consumers;
     for (int i = 0; i < 2; ++i) {
@@ -1131,15 +1002,6 @@ int main(int argc, char **argv) {
     for (auto& t : serial_query_threads) {
         t.join();
     }
-
-#ifdef USE_ROS2
-    if (pwm_sync_t.joinable()) {
-        pwm_sync_t.join();
-    }
-    if (rclcpp::ok()) {
-        rclcpp::shutdown();
-    }
-#endif
 
     interface_t.join();
 

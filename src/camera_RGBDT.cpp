@@ -17,7 +17,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <iomanip>
 
 #include <filesystem>
@@ -30,10 +29,6 @@
 #include <librealsense2/rs.hpp>
 #include <libserial/SerialPort.h>
 #include <signal.h>
-#ifdef USE_ROS2
-#include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/u_int64.hpp>
-#endif
 
 int if_save = 0;
 int realsense_sync = 0;
@@ -105,7 +100,6 @@ struct StampedGuideFrame {
     cv::Mat temperature_celsius;
     ParamData param_data;
     long host_sec, host_nanosec;
-    long aligned_sec, aligned_nanosec;
     long sensor_sec, sensor_microsec;
 };
 
@@ -113,7 +107,6 @@ struct StampedRealSenseFrame {
     cv::Mat color_image;
     cv::Mat depth_image_raw;
     long host_sec, host_nanosec;
-    long aligned_sec, aligned_nanosec;
     long sensor_sec, sensor_microsec;
 };
 
@@ -129,7 +122,8 @@ std::ofstream lr_time_stream[2];
 std::ofstream lr_param_stream[2];
 std::ofstream lr_temp_stream[2];
 std::ofstream rs_time_stream;
-std::ofstream imu_stream;
+std::ofstream accel_stream;
+std::ofstream gyro_stream;
 
 std::mutex lr_mutex[2];
 
@@ -149,17 +143,6 @@ struct buffer *lr_buffers[2] = { nullptr, nullptr };
 std::mutex serial_mutex[2];
 std::condition_variable serial_cv[2];
 
-struct PwmSyncState {
-    std::mutex mutex;
-    std::deque<uint64_t> rise_ns_history;
-    size_t max_history = 600;
-    uint64_t estimated_period_ns = 33333333ULL;
-};
-
-PwmSyncState g_pwm_sync_state;
-constexpr int64_t kGuideHostDelayCompNs = 0;
-constexpr int64_t kRealSenseHostDelayCompNs = 0;
-
 int64_t to_ns_from_sec_nsec(long sec, long nsec)
 {
     return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(nsec);
@@ -168,64 +151,6 @@ int64_t to_ns_from_sec_nsec(long sec, long nsec)
 int64_t to_ns_from_sec_usec(long sec, long usec)
 {
     return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(usec) * 1000LL;
-}
-
-void updatePwmRisingEdge(uint64_t rise_ns)
-{
-    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
-
-    if (!g_pwm_sync_state.rise_ns_history.empty()) {
-        const uint64_t prev = g_pwm_sync_state.rise_ns_history.back();
-        if (rise_ns <= prev) return;
-
-        const uint64_t gap = rise_ns - prev;
-        const uint64_t period = g_pwm_sync_state.estimated_period_ns;
-
-        if (gap < static_cast<uint64_t>(period * 1.3)) {
-            g_pwm_sync_state.estimated_period_ns =
-                static_cast<uint64_t>(0.95 * period + 0.05 * gap);
-        }
-
-        if (gap > static_cast<uint64_t>(period * 1.5)) {
-            uint64_t synthetic = prev + period;
-            while (synthetic < rise_ns && synthetic < prev + 10 * period) {
-                g_pwm_sync_state.rise_ns_history.push_back(synthetic);
-                synthetic += period;
-                while (g_pwm_sync_state.rise_ns_history.size() > g_pwm_sync_state.max_history)
-                    g_pwm_sync_state.rise_ns_history.pop_front();
-            }
-        }
-    }
-
-    g_pwm_sync_state.rise_ns_history.push_back(rise_ns);
-    while (g_pwm_sync_state.rise_ns_history.size() > g_pwm_sync_state.max_history)
-        g_pwm_sync_state.rise_ns_history.pop_front();
-}
-
-uint64_t alignStampToPwmTimeline(uint64_t host_ns, int64_t host_delay_comp_ns = 0)
-{
-    int64_t compensated_ns_signed = static_cast<int64_t>(host_ns) - host_delay_comp_ns;
-    if (compensated_ns_signed < 0) compensated_ns_signed = 0;
-    const uint64_t compensated_ns = static_cast<uint64_t>(compensated_ns_signed);
-
-    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
-    if (g_pwm_sync_state.rise_ns_history.empty()) return host_ns;
-
-    auto it = std::upper_bound(
-        g_pwm_sync_state.rise_ns_history.begin(),
-        g_pwm_sync_state.rise_ns_history.end(),
-        compensated_ns);
-
-    if (it == g_pwm_sync_state.rise_ns_history.begin()) return host_ns;
-
-    const uint64_t snapped_ns = *(it - 1);
-    const uint64_t error_ns = compensated_ns - snapped_ns;
-    const uint64_t half_period = g_pwm_sync_state.estimated_period_ns / 2;
-    if (error_ns > half_period) {
-        if (it != g_pwm_sync_state.rise_ns_history.end()) return *it;
-        return host_ns;
-    }
-    return snapped_ns;
 }
 
 std::string cameraName(int cam_id) {
@@ -238,25 +163,6 @@ std::string serialLink(int port_id) {
     if (port_id == 0) return "/dev/guide_left";
     if (port_id == 1) return "/dev/guide_right";
     return "unknown";
-}
-
-std::vector<std::string> serialCandidates(int port_id)
-{
-    if (port_id == 0) {
-        return {
-            "/dev/guide_left",
-            "/dev/serial/by-path/platform-3610000.usb-usb-0:3.3:1.2",
-            "/dev/ttyACM1", "/dev/ttyACM0"
-        };
-    }
-    if (port_id == 1) {
-        return {
-            "/dev/guide_right",
-            "/dev/serial/by-path/platform-3610000.usb-usb-0:3.4:1.2",
-            "/dev/ttyACM0", "/dev/ttyACM1"
-        };
-    }
-    return {};
 }
 
 cv::Mat convertTemperatureDataToCelsius(const cv::Mat& temper_data) {
@@ -282,22 +188,9 @@ void saveCv32FAs16BitPNG(const cv::Mat& mat, const std::string& filename) {
 
 int open_serial_port(int port_id)
 {
-    const auto candidates = serialCandidates(port_id);
-    if (candidates.empty()) {
+    std::string serial_path = serialLink(port_id);
+    if (serial_path == "unknown") {
         std::cerr << "Open serial error: invalid port_id " << port_id << std::endl;
-        return -1;
-    }
-    std::string serial_path;
-    for (const auto& candidate : candidates) {
-        if (access(candidate.c_str(), F_OK) == 0) {
-            serial_path = candidate;
-            break;
-        }
-    }
-    if (serial_path.empty()) {
-        std::cerr << "Open serial error: no serial device found for port_id " << port_id << ". Tried:";
-        for (const auto& candidate : candidates) std::cerr << " " << candidate;
-        std::cerr << std::endl;
         return -1;
     }
     try {
@@ -365,9 +258,6 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
     auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch() - sec).count();
     const uint64_t host_ns =
         static_cast<uint64_t>(sec.count()) * 1000000000ULL + static_cast<uint64_t>(nanosec);
-    const uint64_t aligned_ns = alignStampToPwmTimeline(host_ns, kGuideHostDelayCompNs);
-    const long aligned_sec = static_cast<long>(aligned_ns / 1000000000ULL);
-    const long aligned_nanosec = static_cast<long>(aligned_ns % 1000000000ULL);
 
     const int MAX_QUEUE_SIZE = 5;
     {
@@ -379,7 +269,6 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
         lr_output_queue[cam_id].emplace(StampedGuideFrame{
             cam_id, gray_image, temperature_celsius, param_data,
             sec.count(), nanosec,
-            aligned_sec, aligned_nanosec,
             tv.tv_sec, tv.tv_usec
         });
     }
@@ -387,17 +276,15 @@ void process_frame(struct v4l2_buffer *buf, void *mmap_buffer, int cam_id, TimeP
 }
 
 void save_guide_frame(const StampedGuideFrame& frame) {
-    const int64_t aligned_ns = to_ns_from_sec_nsec(frame.aligned_sec, frame.aligned_nanosec);
     const int64_t host_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
     const int64_t sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-    const int64_t host_minus_aligned_ns = host_ns - aligned_ns;
 
     lr_time_stream[frame.cam_id]
-        << aligned_ns << "," << sensor_ns << "," << host_ns << "," << host_minus_aligned_ns
+        << sensor_ns << "," << host_ns
         << std::endl;
 
     lr_param_stream[frame.cam_id]
-        << frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec
+        << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
         << "," << frame.param_data.humidity
         << "," << frame.param_data.distance_x10
         << "," << frame.param_data.emissivity
@@ -417,41 +304,45 @@ void save_guide_frame(const StampedGuideFrame& frame) {
 
     std::ostringstream ss;
     ss << outputdir << "/" << cameraName(frame.cam_id) << "/image/"
-       << frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+         << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ".png";
     cv::imwrite(ss.str(), frame.gray_image);
 
     ss.str(""); ss.clear();
     ss << outputdir << "/" << cameraName(frame.cam_id) << "/temperature/"
-       << frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+         << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ".png";
     saveCv32FAs16BitPNG(frame.temperature_celsius, ss.str());
 }
 
 void save_realsense_frame(const StampedRealSenseFrame& frame) {
-    const int64_t aligned_ns = to_ns_from_sec_nsec(frame.aligned_sec, frame.aligned_nanosec);
     const int64_t host_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
     const int64_t sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-    const int64_t sensor_minus_aligned_ns = sensor_ns - aligned_ns;
 
     rs_time_stream
-        << aligned_ns << "," << sensor_ns << "," << host_ns << "," << sensor_minus_aligned_ns
+          << sensor_ns << "," << host_ns
         << std::endl;
 
     std::ostringstream ss;
     ss << outputdir << "/realsense/rgb/"
-       << frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+         << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << "000.png";
     cv::imwrite(ss.str(), frame.color_image);
 
     ss.str(""); ss.clear();
     ss << outputdir << "/realsense/depth_raw/"
-       << frame.aligned_sec << "." << std::setw(9) << std::setfill('0') << frame.aligned_nanosec << ".png";
+         << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << "000.png";
     cv::imwrite(ss.str(), frame.depth_image_raw);
 }
 
 void save_imu_frame(const StampedImuFrame& frame) {
-    imu_stream
+    std::ostream* out = nullptr;
+    if (frame.stream_type == RS2_STREAM_ACCEL) {
+        out = &accel_stream;
+    } else if (frame.stream_type == RS2_STREAM_GYRO) {
+        out = &gyro_stream;
+    }
+
+    (*out)
         << frame.host_ns << ","
         << frame.sensor_ns << ","
-        << (frame.stream_type == RS2_STREAM_ACCEL ? "accel" : "gyro") << ","
         << std::fixed << std::setprecision(6)
         << frame.x << "," << frame.y << "," << frame.z << "\n";
 }
@@ -516,7 +407,8 @@ void imu_consumer() {
         if (if_save) save_imu_frame(frame);
     }
     std::cout << "Closing IMU stream" << std::endl;
-    imu_stream.close();
+    if (accel_stream.is_open()) accel_stream.close();
+    if (gyro_stream.is_open()) gyro_stream.close();
 }
 
 void save_realsense_intrinsics(const rs2::pipeline_profile& pip_profile, const std::string& output_dir) {
@@ -615,15 +507,16 @@ void prepare_dirs(const std::string& outputdir) {
         lr_temp_stream[0].open(outputdir + "/left/focal_temperature.txt",  std::ios::out);
         lr_temp_stream[1].open(outputdir + "/right/focal_temperature.txt", std::ios::out);
 
-        imu_stream.open(outputdir + "/realsense/imu.csv", std::ios::out);
-        if (imu_stream.is_open()) {
-            imu_stream << "host_ns,sensor_ns,type,x,y,z\n";
-        }
+        accel_stream.open(outputdir + "/realsense/accel.csv", std::ios::out);
+        accel_stream << "host_ns,sensor_ns,ax,ay,az\n";
+
+        gyro_stream.open(outputdir + "/realsense/gyro.csv", std::ios::out);
+        gyro_stream << "host_ns,sensor_ns,gx,gy,gz\n";
 
         const char* guide_csv_header =
-            "aligned_ns,sensor_ns,host_ns,host_minus_aligned_ns\n";
+            "sensor_ns,host_ns\n";
         const char* rs_csv_header =
-            "aligned_ns,sensor_ns,host_ns,sensor_minus_aligned_ns\n";
+            "sensor_ns,host_ns\n";
 
         lr_time_stream[0] << guide_csv_header;
         lr_time_stream[1] << guide_csv_header;
@@ -673,25 +566,6 @@ void guide_producer(int fps, int id)
     close(lr_fd[id]);
 }
 
-// -------------------------------------------------------
-// realsense_producer
-//
-// Architecture: pipeline (color+depth only) + sensor API (IMU)
-//
-// Root cause of previous failures:
-//   When video+IMU are all added to one rs2::pipeline, the SDK's
-//   internal syncer waits for ALL streams (video @ 60Hz, accel @
-//   100Hz, gyro @ 200Hz) to produce a time-aligned frameset before
-//   releasing anything. Because IMU and video timestamps live on
-//   different hardware clocks, this syncer stalls forever —
-//   poll_for_frames() returns 0 and callbacks fire at most once.
-//
-// Fix:
-//   - rs2::pipeline  → color + depth ONLY  (same clock/rate, syncer works)
-//   - rs2::motion_sensor → accel + gyro opened directly via sensor API.
-//     The sensor-level callback is NOT routed through the pipeline
-//     dispatcher and never stalls, regardless of firmware version.
-// -------------------------------------------------------
 void realsense_producer(const std::string& rs_device)
 {
     // ---- Find device ----
@@ -746,12 +620,12 @@ void realsense_producer(const std::string& rs_device)
 
     // ---- Open IMU via sensor API (bypasses pipeline dispatcher entirely) ----
     rs2::sensor motion_sensor;
-    bool has_motion = false;
+    bool imu_started = false;
     for (auto&& s : dev.query_sensors()) {
-        if (s.is<rs2::motion_sensor>()) { motion_sensor = s; has_motion = true; break; }
+        if (s.is<rs2::motion_sensor>()) { motion_sensor = s; break; }
     }
 
-    if (has_motion) {
+    if (motion_sensor) {
         if (motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
             motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
 
@@ -790,11 +664,11 @@ void realsense_producer(const std::string& rs_device)
                 }
                 imu_cv.notify_one();
             });
+            imu_started = true;
             std::cout << "[realsense] IMU sensor started ("
                       << motion_profiles.size() << " streams)" << std::endl;
         } else {
             std::cout << "[realsense] No motion profiles found, IMU disabled" << std::endl;
-            has_motion = false;
         }
     } else {
         std::cout << "[realsense] No motion sensor on device, IMU disabled" << std::endl;
@@ -828,7 +702,7 @@ void realsense_producer(const std::string& rs_device)
 
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
-        if (has_motion) { motion_sensor.stop(); motion_sensor.close(); }
+        if (imu_started) { motion_sensor.stop(); motion_sensor.close(); }
         quitFlag.store(true); imu_cv.notify_all(); rgbd_cv.notify_all(); return;
     }
 
@@ -865,10 +739,6 @@ void realsense_producer(const std::string& rs_device)
         cv::Mat rs_rgb      (cv::Size(frame_width, frame_height), CV_8UC3,  (void*)color_f.get_data());
         cv::Mat rs_depth_raw(cv::Size(frame_width, frame_height), CV_16UC1, (void*)depth_f.get_data());
 
-        const uint64_t aligned_ns      = alignStampToPwmTimeline(sensor_ns, kRealSenseHostDelayCompNs);
-        const long     aligned_sec     = static_cast<long>(aligned_ns / 1000000000ULL);
-        const long     aligned_nanosec = static_cast<long>(aligned_ns % 1000000000ULL);
-
         const int MAX_QUEUE_SIZE = 5;
         {
             std::unique_lock<std::mutex> lock(rgbd_queue_mutex);
@@ -877,7 +747,6 @@ void realsense_producer(const std::string& rs_device)
             rgbd_output_queue.emplace(StampedRealSenseFrame{
                 rs_rgb.clone(), rs_depth_raw.clone(),
                 host_s.count(), host_nanosec,
-                aligned_sec, aligned_nanosec,
                 sensor_sec, sensor_usec
             });
         }
@@ -885,7 +754,7 @@ void realsense_producer(const std::string& rs_device)
     }
 
     pipeline.stop();
-    if (has_motion) {
+    if (imu_started) {
         motion_sensor.stop();
         motion_sensor.close();
     }
@@ -979,7 +848,11 @@ int main(int argc, char **argv) {
     int trigger_fps = 30;
     outputdir = "./capture";
 
-    std::cout << "Usage: " << argv[0] << " (<realsense_sync>) (<if_save>) (<output_dir>)" << std::endl;
+    std::cout << "Usage: " << argv[0]
+              << " <realsense_sync> [if_save] [output_dir]"
+              << "\n   or: " << argv[0]
+              << " <realsense_sync> <if_save> <tempIncre_detect> <output_dir>"
+              << std::endl;
     if (argc == 2) {
         realsense_sync = atoi(argv[1]);
     } else if (argc == 3) {
@@ -988,9 +861,8 @@ int main(int argc, char **argv) {
     } else if (argc == 4) {
         realsense_sync = atoi(argv[1]);
         if_save = atoi(argv[2]);
-
-    }
-    else if (argc == 5){
+        outputdir = argv[3];
+    } else if (argc == 5) {
         realsense_sync = atoi(argv[1]);
         if_save = atoi(argv[2]);
         tempIncre_detect = atoi(argv[3]);
@@ -1019,25 +891,6 @@ int main(int argc, char **argv) {
         perror("Starting Capture");
         free(lr_buffers[0]); free(lr_buffers[1]); close(lr_fd[0]); close(lr_fd[1]); return EXIT_FAILURE;
     }
-
-#ifdef USE_ROS2
-    rclcpp::init(argc, argv);
-    auto pwm_sync_node = rclcpp::Node::make_shared("camera_rgbdt_pwm_sync");
-    auto pwm_topic = pwm_sync_node->declare_parameter<std::string>(
-        "pwm_topic", "pwm_capture/rising_edge_time_ns");
-    auto pwm_sub = pwm_sync_node->create_subscription<std_msgs::msg::UInt64>(
-        pwm_topic, 200,
-        [](const std_msgs::msg::UInt64::SharedPtr msg) { updatePwmRisingEdge(msg->data); });
-
-    rclcpp::executors::SingleThreadedExecutor pwm_executor;
-    pwm_executor.add_node(pwm_sync_node);
-    std::thread pwm_sync_t([&]() {
-        while (!quitFlag.load() && rclcpp::ok()) {
-            pwm_executor.spin_some();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-    });
-#endif
 
     // Consumers
     std::vector<std::thread> consumers;
@@ -1124,11 +977,6 @@ int main(int argc, char **argv) {
     for (auto& t : display_threads)       t.join();
     for (auto& t : serial_worker_threads) t.join();
     for (auto& t : serial_query_threads)  t.join();
-
-#ifdef USE_ROS2
-    if (pwm_sync_t.joinable()) pwm_sync_t.join();
-    if (rclcpp::ok()) rclcpp::shutdown();
-#endif
 
     interface_t.join();
     return EXIT_SUCCESS;
