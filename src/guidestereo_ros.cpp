@@ -29,6 +29,8 @@
 #include <signal.h>
 #include <cv_bridge/cv_bridge.h>
 
+#include "device_path.h"
+
 #ifdef USE_ROS1
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
@@ -609,10 +611,8 @@ int main(int argc, char **argv) {
 
     int trigger_fps = 30;
 
-    const char* dev_left  =
-        "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0"; // left camera
-    const char* dev_right =
-        "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:8:1.0-video-index0"; // right camera
+    const char* dev_left = device_path::kLeftCamera;
+    const char* dev_right = device_path::kRightCamera;
 
     # ifdef USE_ROS1    
     ros::init(argc, argv, "guidestereo_node");

@@ -29,15 +29,15 @@ lrwxrwxrwx 1 root root 12 1月  15 18:24 pci-0000:00:14.0-usb-0:8:1.0-video-inde
 ```
 
 * e.g.,pci-0000:00:14.0-usb-0:8:1.0-video-index0 -> camera 1
-  
-``` bash
+
+```bash
 # show video stream 1
 ffplay -f v4l2   -pixel_format yuyv422   -video_size 1280x513   -framerate 30   /dev/v4l/by-path/pci-0000:00:8.0-usb-0:8:1.0-video-index0
 ```
 
 * e.g., pci-0000:00:14.0-usb-0:3:1.0-video-index0 -> camera 2
 
-``` bash
+```bash
 # show video stream 2
 ffplay -f v4l2   -pixel_format yuyv422   -video_size 1280x513   -framerate 30   /dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0
 ```
@@ -68,7 +68,7 @@ E: DEVPATH=/devices/pci0000:00/0000:00:14.0/usb2/2-8/2-2:1.2/tty/ttyACM1 # physi
 Make sure the camera head–USB port mapping is correct.
 Then, bind each camera head to its own USB port.
 
-``` bash
+```bash
 sudo touch /etc/udev/rules.d/99-guide.rules
 
 echo 'SUBSYSTEM=="tty", KERNEL=="ttyACM*", DEVPATH=="*/2-2/*", SYMLINK+="guide_left"' | sudo tee /etc/udev/rules.d/99-guide.rules

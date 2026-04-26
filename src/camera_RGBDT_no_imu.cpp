@@ -30,6 +30,9 @@
 #include <libserial/SerialPort.h>
 #include <signal.h>
 
+#include "device_path.h"
+#include "utils.h"
+
 int if_save = 0;
 int realsense_sync = 0;
 const int kReqCount = 4;
@@ -133,16 +136,6 @@ struct buffer *lr_buffers[2] = { nullptr, nullptr };
 std::mutex serial_mutex[2];
 std::condition_variable serial_cv[2];
 
-int64_t to_ns_from_sec_nsec(long sec, long nsec)
-{
-    return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(nsec);
-}
-
-int64_t to_ns_from_sec_usec(long sec, long usec)
-{
-    return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(usec) * 1000LL;
-}
-
 std::string cameraName(int cam_id) {
     if (cam_id == 0) {
         return "left";
@@ -161,6 +154,40 @@ std::string serialLink(int port_id){
         return "/dev/guide_right";
     }
     return "unknown";
+}
+
+bool configure_realsense_sync_mode(rs2::depth_sensor& depth_sensor, int sync_mode)
+{
+    if (!depth_sensor.supports(RS2_OPTION_INTER_CAM_SYNC_MODE)) {
+        std::cerr << "[realsense] Inter-cam sync mode is not supported by this depth sensor" << std::endl;
+        return sync_mode == 0;
+    }
+
+    try {
+        const rs2::option_range range = depth_sensor.get_option_range(RS2_OPTION_INTER_CAM_SYNC_MODE);
+        const float current_mode = depth_sensor.get_option(RS2_OPTION_INTER_CAM_SYNC_MODE);
+        std::cout << "[realsense] Inter-cam sync current mode: " << current_mode << std::endl;
+
+        if (sync_mode == 0) {
+            return true;
+        }
+
+        const float requested_mode = static_cast<float>(sync_mode);
+        if (requested_mode < range.min || requested_mode > range.max) {
+            std::cerr << "[realsense] Requested sync mode " << sync_mode
+                      << " is out of range [" << range.min << ", " << range.max << "]" << std::endl;
+            return false;
+        }
+
+        depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, requested_mode);
+        const float actual_mode = depth_sensor.get_option(RS2_OPTION_INTER_CAM_SYNC_MODE);
+        std::cout << "[realsense] Inter-cam sync requested mode " << sync_mode
+                  << ", actual mode " << actual_mode << std::endl;
+        return std::fabs(actual_mode - requested_mode) < 0.5f;
+    } catch (const rs2::error& e) {
+        std::cerr << "[realsense] Failed to configure inter-cam sync mode: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 std::vector<std::string> serialCandidates(int port_id)
@@ -357,21 +384,19 @@ void save_guide_frame(const StampedGuideFrame& frame) {
 }
 
 void save_realsense_frame(const StampedRealSenseFrame& frame) {
-    const int64_t host_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
-    const int64_t sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
+    const std::string host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
+    const std::string sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
 
     rs_time_stream
-        << sensor_ns << "," << host_ns
+        << sensor_time << "," << host_time
         << std::endl;
 
     std::ostringstream ss;
-    ss << outputdir << "/realsense/rgb/"
-       << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << "000.png";
+    ss << outputdir << "/realsense/rgb/" << sensor_time << ".png";
     cv::imwrite(ss.str(), frame.color_image);
 
     ss.str(""); ss.clear();
-    ss << outputdir << "/realsense/depth_raw/"
-       << frame.sensor_sec << "." << std::setw(6) << std::setfill('0') << frame.sensor_microsec << "000.png";
+    ss << outputdir << "/realsense/depth_raw/" << sensor_time << ".png";
     cv::imwrite(ss.str(), frame.depth_image_raw);
 }
 
@@ -547,7 +572,7 @@ void prepare_dirs(const std::string& outputdir) {
         lr_temp_stream[1].open(outputdir + "/right/focal_temperature.txt", std::ios::out);
 
         const char* guide_csv_header = "sensor_ns,host_ns\n";
-        const char* rs_csv_header   = "sensor_ns,host_ns\n";
+        const char* rs_csv_header   = "sensor_time,host_time\n";
 
         lr_time_stream[0] << guide_csv_header;
         lr_time_stream[1] << guide_csv_header;
@@ -641,9 +666,8 @@ void realsense_producer(const std::string& rs_device)
         std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
     }
 
-    if (realsense_sync) {
-        depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, 1);
-        std::cout << "[realsense] Inter-cam sync mode set to 1 (Master)" << std::endl;
+    if (!configure_realsense_sync_mode(depth_sensor, realsense_sync)) {
+        quitFlag.store(true); rgbd_cv.notify_all(); return;
     }
 
     if (if_save) {
@@ -688,12 +712,28 @@ void realsense_producer(const std::string& rs_device)
         quitFlag.store(true); rgbd_cv.notify_all(); return;
     }
 
+    bool has_last_depth_frame_number = false;
+    unsigned long long last_depth_frame_number = 0;
     while (!quitFlag.load()) {
         rs2::frameset frameset;
         if (!pipeline.poll_for_frames(&frameset)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
+
+        rs2::depth_frame raw_depth_f = frameset.get_depth_frame();
+        if (!raw_depth_f) continue;
+
+        const unsigned long long depth_frame_number = raw_depth_f.get_frame_number();
+        if (has_last_depth_frame_number && depth_frame_number == last_depth_frame_number) {
+            continue;
+        }
+
+        const double rs_ts_ms = raw_depth_f.get_timestamp();
+        if (!std::isfinite(rs_ts_ms) || rs_ts_ms < 0.0) continue;
+
+        last_depth_frame_number = depth_frame_number;
+        has_last_depth_frame_number = true;
 
         rs2::frameset aligned    = align_to_color.process(frameset);
         rs2::video_frame color_f = aligned.get_color_frame();
@@ -707,9 +747,6 @@ void realsense_producer(const std::string& rs_device)
         auto host_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
         long host_nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(
             now.time_since_epoch() - host_s).count();
-
-        const double rs_ts_ms = color_f.get_timestamp();
-        if (!std::isfinite(rs_ts_ms) || rs_ts_ms < 0.0) continue;
 
         const uint64_t sensor_ns   = static_cast<uint64_t>(rs_ts_ms * 1.0e6);
         const long     sensor_sec  = static_cast<long>(sensor_ns / 1000000000ULL);
@@ -833,7 +870,7 @@ int main(int argc, char **argv) {
     int trigger_fps = 30;
     outputdir = "./capture";
 
-    std::cout << "Usage: " << argv[0] << " (<realsense_sync>) (<if_save>) (<output_dir>)" << std::endl;
+    std::cout << "Usage: " << argv[0] << " (<realsense_sync_mode>) (<if_save>) (<output_dir>)" << std::endl;
     if (argc == 2) {
         realsense_sync = atoi(argv[1]);
     }
@@ -850,12 +887,10 @@ int main(int argc, char **argv) {
 
     if (if_save) prepare_dirs(outputdir);
 
-    const char* dev_left  =
-        "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.3:1.0-video-index0"; // left camera
-    const char* dev_right =
-        "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.4:1.0-video-index0"; // right camera
+    const char* dev_left = device_path::kLeftCamera;
+    const char* dev_right = device_path::kRightCamera;
 
-    const std::string dev_rs = "253822301280"; // realsense
+    const std::string dev_rs(device_path::kRealSenseSerial); // realsense
 
     for (auto& cmd : serial_cmd) {
         cmd.store(SerialCmd::NONE);

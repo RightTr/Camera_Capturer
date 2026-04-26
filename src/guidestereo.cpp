@@ -27,6 +27,9 @@
 #include <libserial/SerialPort.h>
 #include <signal.h>
 
+#include "device_path.h"
+#include "utils.h"
+
 int if_save = 0;
 std::vector<std::atomic<int>> if_sync(2);  // -1: no change, 0: sync off, 1: sync on
 const int kReqCount = 4;
@@ -119,16 +122,6 @@ struct buffer *lr_buffers[2] = { nullptr, nullptr };
 
 std::mutex serial_mutex[2];
 std::condition_variable serial_cv[2];
-
-int64_t to_ns_from_sec_nsec(long sec, long nsec)
-{
-    return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(nsec);
-}
-
-int64_t to_ns_from_sec_usec(long sec, long usec)
-{
-    return static_cast<int64_t>(sec) * 1000000000LL + static_cast<int64_t>(usec) * 1000LL;
-}
 
 std::string cameraName(int cam_id) {
     if (cam_id == 0) {
@@ -615,10 +608,8 @@ int main(int argc, char **argv) {
 
     if (if_save) prepare_dirs(outputdir);
 
-    const char* dev_left  =
-        "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.3:1.0-video-index0"; // left camera
-    const char* dev_right =
-        "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.4:1.0-video-index0"; // right camera
+    const char* dev_left = device_path::kLeftCamera;
+    const char* dev_right = device_path::kRightCamera;
 
     std::vector<std::thread> consumers;
     // Start consumer threads

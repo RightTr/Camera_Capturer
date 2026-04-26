@@ -34,17 +34,6 @@ target_include_directories(realsense
     PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
 )
 
-add_executable(realsense_imu_test src/realsense_imu_test.cpp)
-target_link_libraries(realsense_imu_test
-    ${OpenCV_LIBS}
-    pthread
-    serial
-    realsense2::realsense2
-)
-target_include_directories(realsense_imu_test
-    PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
-)
-
 add_executable(camera_RGBDT src/camera_RGBDT.cpp)
 target_link_libraries(camera_RGBDT
     ${OpenCV_LIBS}
@@ -90,11 +79,22 @@ if(USE_ROS1)
     )
 
     add_executable(guidestereo_node src/guidestereo_ros.cpp)
+    add_executable(camera_RGBDT_node src/camera_RGBDT_ros.cpp)
     target_link_libraries(guidestereo_node
         ${catkin_LIBRARIES}
         pthread
         serial
         )
+    target_link_libraries(camera_RGBDT_node
+        ${catkin_LIBRARIES}
+        ${OpenCV_LIBS}
+        pthread
+        serial
+        realsense2::realsense2
+    )
+    target_include_directories(camera_RGBDT_node
+        PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    )
 
 endif()
 
@@ -107,7 +107,14 @@ if(USE_ROS2)
     find_package(cv_bridge REQUIRED)
 
     add_executable(guidestereo_node src/guidestereo_ros.cpp)
+    add_executable(camera_RGBDT_node src/camera_RGBDT_ros.cpp)
     ament_target_dependencies(guidestereo_node
+        rclcpp
+        sensor_msgs
+        std_msgs
+        cv_bridge
+    )
+    ament_target_dependencies(camera_RGBDT_node
         rclcpp
         sensor_msgs
         std_msgs
@@ -123,15 +130,22 @@ if(USE_ROS2)
         rclcpp
         std_msgs
     )
-    ament_target_dependencies(realsense_imu_test
-        rclcpp
-        std_msgs
-    )
     target_link_libraries(guidestereo_node
         pthread
         serial
         )
-    install(TARGETS guidestereo_node
+    target_link_libraries(camera_RGBDT_node
+        ${OpenCV_LIBS}
+        pthread
+        serial
+        realsense2::realsense2
+    )
+    target_include_directories(camera_RGBDT_node
+        PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    )
+    install(TARGETS guidestereo_node camera_RGBDT_node
         DESTINATION lib/${PROJECT_NAME})
+    install(DIRECTORY launch
+        DESTINATION share/${PROJECT_NAME})
     ament_package() # Don't forget this
 endif()

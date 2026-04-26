@@ -7,3 +7,7 @@ build/
 workspace/
 
 package.xml
+
+.history
+
+.codex
