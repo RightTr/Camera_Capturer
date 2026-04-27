@@ -18,7 +18,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "if_save",
-            default_value="0",
+            default_value="1",
             description="Save captured data to disk when non-zero.",
         ),
         DeclareLaunchArgument(

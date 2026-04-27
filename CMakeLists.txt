@@ -118,7 +118,6 @@ if(USE_ROS2)
         rclcpp
         sensor_msgs
         std_msgs
-        cv_bridge
     )
     ament_target_dependencies(realsense
         rclcpp

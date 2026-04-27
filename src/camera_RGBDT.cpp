@@ -607,15 +607,20 @@ void realsense_producer(const std::string& rs_device)
     // ---- Configure video sensors ----
     rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
 
-    if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
-        float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
-        depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
-        std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
+    if (depth_sensor.supports(RS2_OPTION_EMITTER_ON_OFF)) {
+        depth_sensor.set_option(RS2_OPTION_EMITTER_ON_OFF, 1.0f);
+        std::cout << "[realsense] Emitter on/off toggling enabled" << std::endl;
     }
 
     if (depth_sensor.supports(RS2_OPTION_EMITTER_ENABLED)) {
-        depth_sensor.set_option(RS2_OPTION_EMITTER_ENABLED, 0.0f);
-        std::cout << "[realsense] Emitter disabled" << std::endl;
+        depth_sensor.set_option(RS2_OPTION_EMITTER_ENABLED, 1.0f);
+        std::cout << "[realsense] Emitter enabled" << std::endl;
+    }
+
+    if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
+        const float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
+        depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
+        std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
     }
 
     if (!configure_realsense_sync(depth_sensor, rs_enable != 0)) {

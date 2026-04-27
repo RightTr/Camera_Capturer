@@ -1,18 +1,19 @@
 #include <array>
+#include <cstring>
 #include <memory>
-
-#include <cv_bridge/cv_bridge.h>
 
 #ifdef USE_ROS1
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/UInt64.h>
 #elif defined(USE_ROS2)
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/u_int64.hpp>
 #endif
 
 #define guide_consumer camera_rgbdt_file_guide_consumer
@@ -39,6 +40,118 @@ ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
+std::array<std::ofstream, 2> g_guide_aligned_streams;
+std::ofstream g_rs_aligned_stream;
+
+struct PwmSyncState {
+    std::mutex mutex;
+    uint64_t last_rise_ns = 0;
+    double period_ns = 0.0;
+};
+
+PwmSyncState g_pwm_sync_state;
+
+void updatePwmRisingEdge(uint64_t rise_ns)
+{
+    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
+    if (g_pwm_sync_state.last_rise_ns > 0 && rise_ns > g_pwm_sync_state.last_rise_ns) {
+        const uint64_t raw_period = rise_ns - g_pwm_sync_state.last_rise_ns;
+        if (raw_period > 1000000ULL && raw_period < 1000000000ULL) {
+            if (g_pwm_sync_state.period_ns <= 0.0) {
+                g_pwm_sync_state.period_ns = static_cast<double>(raw_period);
+            } else {
+                g_pwm_sync_state.period_ns =
+                    0.9 * g_pwm_sync_state.period_ns + 0.1 * static_cast<double>(raw_period);
+            }
+        }
+    }
+    g_pwm_sync_state.last_rise_ns = rise_ns;
+}
+
+uint64_t alignStampToPwmTimeline(uint64_t host_ns)
+{
+    std::lock_guard<std::mutex> lock(g_pwm_sync_state.mutex);
+    if (g_pwm_sync_state.last_rise_ns == 0 || g_pwm_sync_state.period_ns <= 0.0) {
+        return host_ns;
+    }
+
+    const double period = g_pwm_sync_state.period_ns;
+    const double nearest_index =
+        std::llround((static_cast<double>(host_ns) - static_cast<double>(g_pwm_sync_state.last_rise_ns)) / period);
+    const double aligned_ns_d = static_cast<double>(g_pwm_sync_state.last_rise_ns) + nearest_index * period;
+    const double error_ns = std::abs(static_cast<double>(host_ns) - aligned_ns_d);
+
+    if (error_ns > 0.6 * period || aligned_ns_d < 0.0) {
+        return host_ns;
+    }
+    return static_cast<uint64_t>(aligned_ns_d);
+}
+
+void open_aligned_csv_streams(const std::string& base_dir)
+{
+    g_guide_aligned_streams[0].open(base_dir + "/left/aligned.csv", std::ios::out);
+    g_guide_aligned_streams[1].open(base_dir + "/right/aligned.csv", std::ios::out);
+    g_rs_aligned_stream.open(base_dir + "/realsense/aligned.csv", std::ios::out);
+
+    const char* guide_header =
+        "aligned_time,aligned_ns,sensor_time,sensor_ns,host_time,host_ns,sensor_minus_aligned_ns\n";
+    const char* rs_header =
+        "aligned_time,aligned_ns,sensor_time,sensor_ns,host_time,host_ns,sensor_minus_aligned_ns\n";
+
+    if (g_guide_aligned_streams[0].is_open()) g_guide_aligned_streams[0] << guide_header;
+    if (g_guide_aligned_streams[1].is_open()) g_guide_aligned_streams[1] << guide_header;
+    if (g_rs_aligned_stream.is_open()) g_rs_aligned_stream << rs_header;
+}
+
+void close_aligned_csv_streams()
+{
+    for (auto& stream : g_guide_aligned_streams) {
+        if (stream.is_open()) stream.close();
+    }
+    if (g_rs_aligned_stream.is_open()) g_rs_aligned_stream.close();
+}
+
+void write_guide_aligned_csv(int id, const StampedGuideFrame& frame)
+{
+    if (!g_guide_aligned_streams[id].is_open()) return;
+
+    const uint64_t host_ns = static_cast<uint64_t>(to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec));
+    const uint64_t sensor_ns = static_cast<uint64_t>(to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec));
+    const uint64_t aligned_ns = alignStampToPwmTimeline(sensor_ns);
+    const long aligned_sec = static_cast<long>(aligned_ns / 1000000000ULL);
+    const long aligned_nsec = static_cast<long>(aligned_ns % 1000000000ULL);
+
+    g_guide_aligned_streams[id]
+        << format_timestamp_sec_nsec(aligned_sec, aligned_nsec) << ","
+        << aligned_ns << ","
+        << format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec) << ","
+        << sensor_ns << ","
+        << format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec) << ","
+        << host_ns << ","
+        << static_cast<int64_t>(sensor_ns) - static_cast<int64_t>(aligned_ns)
+        << "\n";
+}
+
+void write_rs_aligned_csv(const StampedRealSenseFrame& frame)
+{
+    if (!g_rs_aligned_stream.is_open()) return;
+
+    const uint64_t host_ns = static_cast<uint64_t>(to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec));
+    const uint64_t sensor_ns = static_cast<uint64_t>(to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec));
+    const uint64_t aligned_ns = alignStampToPwmTimeline(sensor_ns);
+    const long aligned_sec = static_cast<long>(aligned_ns / 1000000000ULL);
+    const long aligned_nsec = static_cast<long>(aligned_ns % 1000000000ULL);
+
+    g_rs_aligned_stream
+        << format_timestamp_sec_nsec(aligned_sec, aligned_nsec) << ","
+        << aligned_ns << ","
+        << format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec) << ","
+        << sensor_ns << ","
+        << format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec) << ","
+        << host_ns << ","
+        << static_cast<int64_t>(sensor_ns) - static_cast<int64_t>(aligned_ns)
+        << "\n";
+}
 
 template <typename CovarianceArray>
 void mark_covariance_unavailable(CovarianceArray& covariance)
@@ -85,9 +198,24 @@ ros::Time to_ros_time_ns(uint64_t ns)
 void publish_image(const ros::Publisher& pub, const cv::Mat& image, const std::string& encoding,
                    const std::string& frame_id, const ros::Time& stamp)
 {
-    auto msg = cv_bridge::CvImage(std_msgs::Header(), encoding, image).toImageMsg();
+    auto msg = boost::make_shared<sensor_msgs::Image>();
     msg->header.frame_id = frame_id;
     msg->header.stamp = stamp;
+    msg->height = image.rows;
+    msg->width = image.cols;
+    msg->encoding = encoding;
+    msg->is_bigendian = false;
+    msg->step = static_cast<sensor_msgs::Image::_step_type>(image.step);
+    const size_t bytes = image.total() * image.elemSize();
+    msg->data.resize(bytes);
+    if (image.isContinuous()) {
+        std::memcpy(msg->data.data(), image.data, bytes);
+    } else {
+        for (int r = 0; r < image.rows; ++r) {
+            std::memcpy(msg->data.data() + static_cast<size_t>(r) * image.step,
+                        image.ptr(r), image.step);
+        }
+    }
     pub.publish(msg);
 }
 
@@ -131,10 +259,25 @@ rclcpp::Time to_ros_time_ns(uint64_t ns)
 void publish_image(const ImagePublisher& pub, const cv::Mat& image, const std::string& encoding,
                    const std::string& frame_id, const rclcpp::Time& stamp)
 {
-    auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), encoding, image).toImageMsg();
-    msg->header.frame_id = frame_id;
-    msg->header.stamp = stamp;
-    pub->publish(*msg);
+    sensor_msgs::msg::Image msg;
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = stamp;
+    msg.height = image.rows;
+    msg.width = image.cols;
+    msg.encoding = encoding;
+    msg.is_bigendian = false;
+    msg.step = static_cast<sensor_msgs::msg::Image::_step_type>(image.step);
+    const size_t bytes = image.total() * image.elemSize();
+    msg.data.resize(bytes);
+    if (image.isContinuous()) {
+        std::memcpy(msg.data.data(), image.data, bytes);
+    } else {
+        for (int r = 0; r < image.rows; ++r) {
+            std::memcpy(msg.data.data() + static_cast<size_t>(r) * image.step,
+                        image.ptr(r), image.step);
+        }
+    }
+    pub->publish(msg);
 }
 
 void publish_imu(const ImuPublisher& pub, const StampedImuFrame& frame, const std::string& frame_id)
@@ -173,6 +316,7 @@ void guide_consumer(int id)
         }
         lr_cv[id].notify_one();
         if (if_save) save_guide_frame(frame);
+        if (if_save) write_guide_aligned_csv(id, frame);
 
         const auto stamp = to_ros_time_sec_usec(frame.sensor_sec, frame.sensor_microsec);
         const std::string frame_id = (id == 0) ? "guide_left" : "guide_right";
@@ -194,6 +338,7 @@ void realsense_consumer()
         }
         rgbd_cv.notify_one();
         if (if_save) save_realsense_frame(frame);
+        if (if_save) write_rs_aligned_csv(frame);
 
         const auto stamp = to_ros_time_sec_usec(frame.sensor_sec, frame.sensor_microsec);
         publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", stamp);
@@ -281,12 +426,20 @@ int main(int argc, char **argv)
                 serial_cv[i].notify_one();
             }
         });
+    auto pwm_sub = node->create_subscription<std_msgs::msg::UInt64>(
+        "pwm_capture/rising_edge_time_ns", 200,
+        [&](const std_msgs::msg::UInt64::SharedPtr msg) {
+            updatePwmRisingEdge(msg->data);
+        });
 #endif
 
     printf("trigger_fps %d, sync_enable %d, if_save %d, tempIncre_detect %d, outputdir %s\n",
            trigger_fps, rs_enable, if_save, tempIncre_detect, outputdir.c_str());
 
-    if (if_save) prepare_dirs(outputdir);
+    if (if_save) {
+        prepare_dirs(outputdir);
+        open_aligned_csv_streams(outputdir);
+    }
 
     const char* dev_left = device_path::kLeftCamera;
     const char* dev_right = device_path::kRightCamera;
@@ -360,6 +513,7 @@ int main(int argc, char **argv)
     for (auto& t : consumers) t.join();
     for (auto& t : serial_worker_threads) t.join();
     for (auto& t : serial_query_threads) t.join();
+    close_aligned_csv_streams();
 
 #ifdef USE_ROS2
     rclcpp::shutdown();
