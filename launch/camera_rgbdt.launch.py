@@ -8,7 +8,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    rs_sync_enable = LaunchConfiguration("rs_sync_enable")
+    rs_sync_mode = LaunchConfiguration("rs_sync_mode")
     if_save = LaunchConfiguration("if_save")
     temp_incre_detect = LaunchConfiguration("temp_incre_detect")
     output_dir = LaunchConfiguration("output_dir")
@@ -19,9 +19,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            "rs_sync_enable",
-            default_value="1",
-            description="Enable external sync when non-zero.",
+            "rs_sync_mode",
+            default_value="3",
+            description="RealSense inter-cam sync mode. Set 0 to disable.",
         ),
         DeclareLaunchArgument(
             "if_save",
@@ -49,7 +49,7 @@ def generate_launch_description():
             name="camera_rgbdt_node",
             output="screen",
             parameters=[{
-                "rs_sync_enable": rs_sync_enable,
+                "rs_sync_mode": rs_sync_mode,
                 "if_save": if_save,
                 "temp_incre_detect": temp_incre_detect,
                 "output_dir": output_dir,

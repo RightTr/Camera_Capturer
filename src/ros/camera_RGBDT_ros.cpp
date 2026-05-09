@@ -18,7 +18,7 @@ using ImuPublisher = Publisher<ImuMsg>;
 using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 int if_save = 0;
-int rs_enable = 0;
+int rs_sync_mode = 0;
 int tempIncre_detect = 0;
 
 std::atomic<bool> quitFlag(false);
@@ -128,7 +128,7 @@ int main(int argc, char **argv)
     outputdir = "/data/home/pi/Cap";
 
     init(argc, argv, "camera_rgbdt_node");
-    rs_enable = param<int>("rs_sync_enable", 1);
+    rs_sync_mode = param<int>("rs_sync_mode", 3);
     if_save = param<int>("if_save", 0);
     tempIncre_detect = param<int>("temp_incre_detect", 0);
     outputdir = param<std::string>("output_dir", "/data/home/pi/Cap");
@@ -147,8 +147,8 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_enable %d, if_save %d, tempIncre_detect %d, outputdir %s\n",
-           trigger_fps, rs_enable, if_save, tempIncre_detect, outputdir.c_str());
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, tempIncre_detect %d, outputdir %s\n",
+           trigger_fps, rs_sync_mode, if_save, tempIncre_detect, outputdir.c_str());
 
     if (if_save && !open_writers(outputdir)) {
         return EXIT_FAILURE;
@@ -185,7 +185,7 @@ int main(int argc, char **argv)
         [](double scale) {
             if (if_save) rs_writer->write_depth_scale(scale);
         });
-    rs_prod->set_sync_mode(rs_enable ? 3 : 0);
+    rs_prod->set_sync_mode(rs_sync_mode);
 
     if (!GuideProducer::start_capture_pair(guides)) {
         return EXIT_FAILURE;

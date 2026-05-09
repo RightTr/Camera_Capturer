@@ -39,7 +39,7 @@
 using namespace LibSerial;
 
 int if_save = 0;
-int rs_enable = 0;
+int rs_sync_mode = 0;
 int tempIncre_detect = 0;
 
 std::atomic<bool> quitFlag(false);
@@ -114,21 +114,21 @@ int main(int argc, char **argv) {
     outputdir = "/data/home/pi/Cap";
 
     std::cout << "Usage: " << argv[0]
-              << " <rs_enable> [if_save] [output_dir]"
+              << " <rs_sync_mode> [if_save] [output_dir]"
               << "\n   or: " << argv[0]
-              << " <rs_enable> <if_save> <tempIncre_detect> <output_dir>"
+              << " <rs_sync_mode> <if_save> <tempIncre_detect> <output_dir>"
               << std::endl;
     if (argc == 2) {
-        rs_enable = atoi(argv[1]);
+        rs_sync_mode = atoi(argv[1]);
     } else if (argc == 3) {
-        rs_enable = atoi(argv[1]);
+        rs_sync_mode = atoi(argv[1]);
         if_save = atoi(argv[2]);
     } else if (argc == 4) {
-        rs_enable = atoi(argv[1]);
+        rs_sync_mode = atoi(argv[1]);
         if_save = atoi(argv[2]);
         outputdir = argv[3];
     } else if (argc == 5) {
-        rs_enable = atoi(argv[1]);
+        rs_sync_mode = atoi(argv[1]);
         if_save = atoi(argv[2]);
         tempIncre_detect = atoi(argv[3]);
         outputdir = argv[4];
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
         [](double scale) {
             if (if_save) rs_writer->write_depth_scale(scale);
         });
-    rs_prod->set_sync_mode(rs_enable ? 3 : 0);
+    rs_prod->set_sync_mode(rs_sync_mode);
 
     if (!GuideProducer::start_capture_pair(guides)) {
         return EXIT_FAILURE;
