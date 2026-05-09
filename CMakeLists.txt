@@ -171,9 +171,9 @@ if(USE_ROS2)
     )
     install(TARGETS guidestereo_node camera_RGBDT_node
         DESTINATION lib/${PROJECT_NAME})
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
-        install(DIRECTORY launch
-            DESTINATION share/${PROJECT_NAME})
-    endif()
+    install(DIRECTORY launch
+        DESTINATION share/${PROJECT_NAME})
+    install(DIRECTORY rviz_cfg
+        DESTINATION share/${PROJECT_NAME})
     ament_package() # Don't forget this
 endif()
