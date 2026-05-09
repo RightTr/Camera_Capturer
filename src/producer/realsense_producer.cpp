@@ -243,10 +243,13 @@ void RealSenseProducer::run()
 
     rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
     if (depth_sensor.supports(RS2_OPTION_EMITTER_ON_OFF)) {
-        depth_sensor.set_option(RS2_OPTION_EMITTER_ON_OFF, 1.0f);
+        depth_sensor.set_option(RS2_OPTION_EMITTER_ON_OFF, 0.0f);
     }
     if (depth_sensor.supports(RS2_OPTION_EMITTER_ENABLED)) {
         depth_sensor.set_option(RS2_OPTION_EMITTER_ENABLED, 1.0f);
+    }
+    if (depth_sensor.supports(RS2_OPTION_EMITTER_ALWAYS_ON)) {
+        depth_sensor.set_option(RS2_OPTION_EMITTER_ALWAYS_ON, 1.0f);
     }
     if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
         const float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;

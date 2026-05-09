@@ -36,12 +36,11 @@
 #include "writer/guide_writer.h"
 #include "writer/realsense_writer.h"
 
+using namespace LibSerial;
+
 int if_save = 0;
 int rs_enable = 0;
-const int kReqCount = 4;
 int tempIncre_detect = 0;
-
-using namespace LibSerial;
 
 std::atomic<bool> quitFlag(false);
 
@@ -79,7 +78,8 @@ void imu_consumer() {
     }
 }
 
-bool open_writers(const std::string& base_dir) {
+bool open_writers(const std::string& base_dir)
+{
     for (int i = 0; i < 2; ++i) {
         guide_writers[i] = std::make_unique<GuideWriter>(
             base_dir,
@@ -96,9 +96,13 @@ bool open_writers(const std::string& base_dir) {
 void signal_handler(int)
 {
     quitFlag.store(true);
-    if (rs_prod) rs_prod->stop();
+    if (rs_prod) {
+        rs_prod->stop();
+    }
     for (int i = 0; i < 2; ++i) {
-        if (guides[i]) guides[i]->stop();
+        if (guides[i]) {
+            guides[i]->stop();
+        }
     }
 }
 

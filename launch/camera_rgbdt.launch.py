@@ -8,7 +8,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    sync_enable = LaunchConfiguration("sync_enable")
+    rs_sync_enable = LaunchConfiguration("rs_sync_enable")
     if_save = LaunchConfiguration("if_save")
     temp_incre_detect = LaunchConfiguration("temp_incre_detect")
     output_dir = LaunchConfiguration("output_dir")
@@ -19,13 +19,13 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            "sync_enable",
+            "rs_sync_enable",
             default_value="1",
             description="Enable external sync when non-zero.",
         ),
         DeclareLaunchArgument(
             "if_save",
-            default_value="0",
+            default_value="1",
             description="Save captured data to disk when non-zero.",
         ),
         DeclareLaunchArgument(
@@ -49,7 +49,7 @@ def generate_launch_description():
             name="camera_rgbdt_node",
             output="screen",
             parameters=[{
-                "sync_enable": sync_enable,
+                "rs_sync_enable": rs_sync_enable,
                 "if_save": if_save,
                 "temp_incre_detect": temp_incre_detect,
                 "output_dir": output_dir,

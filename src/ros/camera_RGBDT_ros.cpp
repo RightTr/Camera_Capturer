@@ -1,22 +1,34 @@
 #include <array>
-#include <cstring>
+#include <atomic>
+#include <csignal>
 #include <memory>
+#include <string>
+#include <thread>
+#include <vector>
 
+#include "device_path.h"
+#include "producer/guide_producer.h"
+#include "producer/realsense_producer.h"
 #include "utils/ros_utils.h"
-
-#define guide_consumer camera_rgbdt_file_guide_consumer
-#define realsense_consumer camera_rgbdt_file_realsense_consumer
-#define imu_consumer camera_rgbdt_file_imu_consumer
-#define main camera_rgbdt_standalone_main
-#include "camera_RGBDT.cpp"
-#undef main
-#undef imu_consumer
-#undef realsense_consumer
-#undef guide_consumer
+#include "writer/guide_writer.h"
+#include "writer/realsense_writer.h"
 
 using ImagePublisher = Publisher<ImageMsg>;
 using ImuPublisher = Publisher<ImuMsg>;
 using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
+
+int if_save = 0;
+int rs_enable = 0;
+int tempIncre_detect = 0;
+
+std::atomic<bool> quitFlag(false);
+
+std::string outputdir;
+std::unique_ptr<GuideWriter> guide_writers[2];
+std::unique_ptr<RealSenseWriter> rs_writer;
+
+std::unique_ptr<GuideProducer> guides[2];
+std::unique_ptr<RealSenseProducer> rs_prod;
 
 std::array<ImagePublisher, 2> g_guide_image_pubs;
 std::array<ImagePublisher, 2> g_guide_temp_pubs;
@@ -24,6 +36,34 @@ ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
+
+bool open_writers(const std::string& base_dir)
+{
+    for (int i = 0; i < 2; ++i) {
+        guide_writers[i] = std::make_unique<GuideWriter>(
+            base_dir,
+            GuideProducer::camera_name(i));
+        if (!guide_writers[i]->open()) {
+            return false;
+        }
+    }
+
+    rs_writer = std::make_unique<RealSenseWriter>(base_dir);
+    return rs_writer->open();
+}
+
+void signal_handler(int)
+{
+    quitFlag.store(true);
+    if (rs_prod) {
+        rs_prod->stop();
+    }
+    for (int i = 0; i < 2; ++i) {
+        if (guides[i]) {
+            guides[i]->stop();
+        }
+    }
+}
 
 void guide_consumer(int id)
 {
@@ -88,7 +128,7 @@ int main(int argc, char **argv)
     outputdir = "/data/home/pi/Cap";
 
     init(argc, argv, "camera_rgbdt_node");
-    rs_enable = param<int>("sync_enable", 1);
+    rs_enable = param<int>("rs_sync_enable", 1);
     if_save = param<int>("if_save", 0);
     tempIncre_detect = param<int>("temp_incre_detect", 0);
     outputdir = param<std::string>("output_dir", "/data/home/pi/Cap");
@@ -107,11 +147,11 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, sync_enable %d, if_save %d, tempIncre_detect %d, outputdir %s\n",
+    printf("trigger_fps %d, rs_sync_enable %d, if_save %d, tempIncre_detect %d, outputdir %s\n",
            trigger_fps, rs_enable, if_save, tempIncre_detect, outputdir.c_str());
 
-    if (if_save) {
-        if (!open_writers(outputdir)) return EXIT_FAILURE;
+    if (if_save && !open_writers(outputdir)) {
+        return EXIT_FAILURE;
     }
 
     const char* dev_left = device_path::kLeftCamera;
@@ -134,6 +174,7 @@ int main(int argc, char **argv)
     if (!GuideProducer::start_serial_pair(guides)) {
         return EXIT_FAILURE;
     }
+
     rs_prod = std::make_unique<RealSenseProducer>(
         dev_rs,
         [] { return !quitFlag.load(); },
