@@ -1,363 +1,142 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <signal.h>
-
 #include <atomic>
 #include <chrono>
-#include <cmath>
-#include <condition_variable>
+#include <csignal>
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <queue>
-#include <sstream>
+#include <string>
 #include <thread>
 
-#include <opencv2/opencv.hpp>
 #include <librealsense2/rs.hpp>
 
-#include "device_path.h"
-#include "utils.h"
+#include "producer/realsense_producer.h"
 
-int if_save = 0;
-int realsense_sync = 0;
+namespace {
+std::atomic<bool> g_stop(false);
 
-// -------------------------------------------------------
-// Data structures
-// -------------------------------------------------------
-struct StampedRealSenseFrame {
-    cv::Mat color_image;
-    cv::Mat depth_image_raw;
-    long host_sec, host_nanosec;
-    long sensor_sec, sensor_microsec;
-};
-
-// -------------------------------------------------------
-// Globals
-// -------------------------------------------------------
-std::string outputdir;
-std::ofstream rs_time_stream;
-
-std::mutex rgbd_queue_mutex;
-std::condition_variable rgbd_cv;
-std::queue<StampedRealSenseFrame> rgbd_output_queue;
-
-std::atomic<bool> quitFlag(false);
-
-bool configure_realsense_sync_mode(rs2::depth_sensor& depth_sensor, int sync_mode)
-{
-    if (!depth_sensor.supports(RS2_OPTION_INTER_CAM_SYNC_MODE)) {
-        std::cerr << "[realsense] Inter-cam sync mode is not supported by this depth sensor" << std::endl;
-        return sync_mode == 0;
-    }
-
-    try {
-        const rs2::option_range range = depth_sensor.get_option_range(RS2_OPTION_INTER_CAM_SYNC_MODE);
-        const float current_mode = depth_sensor.get_option(RS2_OPTION_INTER_CAM_SYNC_MODE);
-        std::cout << "[realsense] Inter-cam sync current mode: " << current_mode << std::endl;
-
-        if (sync_mode == 0) {
-            return true;
-        }
-
-        const float requested_mode = static_cast<float>(sync_mode);
-        if (requested_mode < range.min || requested_mode > range.max) {
-            std::cerr << "[realsense] Requested sync mode " << sync_mode
-                      << " is out of range [" << range.min << ", " << range.max << "]" << std::endl;
-            return false;
-        }
-
-        depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, requested_mode);
-        const float actual_mode = depth_sensor.get_option(RS2_OPTION_INTER_CAM_SYNC_MODE);
-        std::cout << "[realsense] Inter-cam sync requested mode " << sync_mode
-                  << ", actual mode " << actual_mode << std::endl;
-        return std::fabs(actual_mode - requested_mode) < 0.5f;
-    } catch (const rs2::error& e) {
-        std::cerr << "[realsense] Failed to configure inter-cam sync mode: " << e.what() << std::endl;
-        return false;
-    }
+void signal_handler(int) {
+    g_stop.store(true);
 }
 
-// -------------------------------------------------------
-// Save helpers
-// -------------------------------------------------------
-void save_realsense_frame(const StampedRealSenseFrame& frame)
-{
-    const std::string host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-    const std::string sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
-    rs_time_stream << sensor_time << "," << host_time << "\n";
+}  // namespace
 
-    std::ostringstream ss;
-    ss << outputdir << "/realsense/rgb/" << sensor_time << ".png";
-    cv::imwrite(ss.str(), frame.color_image);
-
-    ss.str(""); ss.clear();
-    ss << outputdir << "/realsense/depth_raw/" << sensor_time << ".png";
-    cv::imwrite(ss.str(), frame.depth_image_raw);
-}
-
-void save_realsense_intrinsics(const rs2::pipeline_profile& profile, const std::string& output_dir)
-{
-    std::string filename = output_dir + "/realsense/realsense_intrinsics.txt";
-    std::ofstream outfile(filename);
-    if (!outfile.is_open()) {
-        std::cerr << "[realsense] Failed to open: " << filename << std::endl; return;
-    }
-    for (const auto& sp : profile.get_streams()) {
-        if (auto vp = sp.as<rs2::video_stream_profile>()) {
-            rs2_intrinsics intr = vp.get_intrinsics();
-            outfile << "--- " << vp.stream_name()
-                    << " (" << rs2_format_to_string(vp.format()) << ") ---\n"
-                    << "  " << intr.width << "x" << intr.height << "\n"
-                    << "  ppx=" << intr.ppx << " ppy=" << intr.ppy << "\n"
-                    << "  fx="  << intr.fx  << " fy="  << intr.fy  << "\n"
-                    << "  dist=" << rs2_distortion_to_string(intr.model) << "\n"
-                    << "  coeffs=["
-                    << intr.coeffs[0] << "," << intr.coeffs[1] << ","
-                    << intr.coeffs[2] << "," << intr.coeffs[3] << ","
-                    << intr.coeffs[4] << "]\n\n";
-        }
-    }
-    outfile.close();
-    std::cout << "[realsense] Intrinsics saved to " << filename << std::endl;
-}
-
-// -------------------------------------------------------
-// Directory preparation
-// -------------------------------------------------------
-void prepare_dirs(const std::string& dir)
-{
-    try {
-        std::filesystem::create_directories(dir + "/realsense/rgb");
-        std::filesystem::create_directories(dir + "/realsense/depth_raw");
-        rs_time_stream.open(dir + "/realsense/times.csv", std::ios::out);
-        rs_time_stream << "sensor_time,host_time\n";
-    } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error creating directories: " << e.what() << std::endl;
-    }
-}
-
-// -------------------------------------------------------
-// Consumer thread
-// -------------------------------------------------------
-void realsense_consumer()
-{
-    while (!quitFlag.load()) {
-        StampedRealSenseFrame frame;
-        {
-            std::unique_lock<std::mutex> lock(rgbd_queue_mutex);
-            rgbd_cv.wait(lock, [&]{ return !rgbd_output_queue.empty() || quitFlag.load(); });
-            if (quitFlag.load()) break;
-            frame = rgbd_output_queue.front();
-            rgbd_output_queue.pop();
-        }
-        rgbd_cv.notify_one();
-        if (if_save) save_realsense_frame(frame);
-    }
-    std::cout << "[realsense] Closing time stream" << std::endl;
-    rs_time_stream.close();
-}
-
-// -------------------------------------------------------
-// Producer thread
-// -------------------------------------------------------
-void realsense_producer(const std::string& rs_device)
-{
-    rs2::context ctx;
-    auto devices = ctx.query_devices();
-    if (devices.size() == 0) {
-        std::cerr << "[realsense] No RealSense device found" << std::endl;
-        quitFlag.store(true); rgbd_cv.notify_all(); return;
-    }
-
-    rs2::device dev;
-    bool found = false;
-    for (auto&& d : devices) {
-        std::string sn = d.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
-        std::cout << "[realsense] Found device SN=" << sn
-                  << "  fw=" << d.get_info(RS2_CAMERA_INFO_FIRMWARE_VERSION) << std::endl;
-        if (rs_device.empty() || sn == rs_device) { dev = d; found = true; break; }
-    }
-    if (!found) {
-        std::cerr << "[realsense] Device not found: " << rs_device << std::endl;
-        quitFlag.store(true); rgbd_cv.notify_all(); return;
-    }
-
-    rs2::depth_sensor depth_sensor = dev.first<rs2::depth_sensor>();
-
-    if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
-        float max_laser = depth_sensor.get_option_range(RS2_OPTION_LASER_POWER).max;
-        depth_sensor.set_option(RS2_OPTION_LASER_POWER, max_laser);
-        std::cout << "[realsense] Laser power set to max: " << max_laser << std::endl;
-    }
-
-    if (!configure_realsense_sync_mode(depth_sensor, realsense_sync)) {
-        quitFlag.store(true); rgbd_cv.notify_all(); return;
-    }
-
-    if (if_save) {
-        float depth_scale = depth_sensor.get_depth_scale();
-        std::cout << "[realsense] Depth scale: " << depth_scale << std::endl;
-        std::ofstream scale_file(outputdir + "/realsense/depth_scale.txt");
-        scale_file << std::fixed << std::setprecision(10) << depth_scale;
-    }
-
-    rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
-    if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
-        color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-    if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED))
-        depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-
-    rs2::pipeline pipeline;
-    rs2::config   cfg;
-    if (!rs_device.empty()) cfg.enable_device(rs_device);
-
-    const int width = 640, height = 480;
-    cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_BGR8, 60);
-    cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16,  60);
-
-    rs2::align           align_to_color(RS2_STREAM_COLOR);
-    rs2::spatial_filter  spatial_filter;
-    rs2::temporal_filter temporal_filter;
-    spatial_filter.set_option(RS2_OPTION_FILTER_MAGNITUDE,    2.0f);
-    spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.5f);
-    spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 20.0f);
-    spatial_filter.set_option(RS2_OPTION_HOLES_FILL,          0);
-
-    try {
-        rs2::pipeline_profile profile = pipeline.start(cfg);
-        std::cout << "[realsense] Video pipeline started. Streams:\n";
-        for (const auto& sp : profile.get_streams())
-            std::cout << "  - " << sp.stream_name()
-                      << " @ " << sp.fps() << " Hz\n";
-
-        if (if_save) save_realsense_intrinsics(profile, outputdir);
-
-    } catch (const rs2::error& e) {
-        std::cerr << "[realsense] Error: " << e.what() << std::endl;
-        quitFlag.store(true); rgbd_cv.notify_all(); return;
-    }
-
-    bool has_last_depth_frame_number = false;
-    unsigned long long last_depth_frame_number = 0;
-    while (!quitFlag.load()) {
-        rs2::frameset frameset;
-        if (!pipeline.poll_for_frames(&frameset)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
-        }
-
-        rs2::depth_frame raw_depth_f = frameset.get_depth_frame();
-        if (!raw_depth_f) continue;
-
-        const unsigned long long depth_frame_number = raw_depth_f.get_frame_number();
-        if (has_last_depth_frame_number && depth_frame_number == last_depth_frame_number) {
-            continue;
-        }
-
-        const double rs_ts_ms = raw_depth_f.get_timestamp();
-        if (!std::isfinite(rs_ts_ms) || rs_ts_ms < 0.0) continue;
-
-        last_depth_frame_number = depth_frame_number;
-        has_last_depth_frame_number = true;
-
-        rs2::frameset aligned    = align_to_color.process(frameset);
-        rs2::video_frame color_f = aligned.get_color_frame();
-        rs2::depth_frame depth_f = aligned.get_depth_frame();
-        if (!color_f || !depth_f) continue;
-
-        depth_f = spatial_filter.process(depth_f);
-        depth_f = temporal_filter.process(depth_f);
-
-        auto now    = std::chrono::system_clock::now();
-        auto host_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-        long host_nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            now.time_since_epoch() - host_s).count();
-
-        const uint64_t sensor_ns   = static_cast<uint64_t>(rs_ts_ms * 1.0e6);
-        const long     sensor_sec  = static_cast<long>(sensor_ns / 1000000000ULL);
-        const long     sensor_usec = static_cast<long>((sensor_ns % 1000000000ULL) / 1000ULL);
-
-        const int fw = color_f.get_width(), fh = color_f.get_height();
-        cv::Mat rs_rgb  (cv::Size(fw, fh), CV_8UC3,  (void*)color_f.get_data());
-        cv::Mat rs_depth(cv::Size(fw, fh), CV_16UC1, (void*)depth_f.get_data());
-
-        {
-            std::unique_lock<std::mutex> lock(rgbd_queue_mutex);
-            rgbd_cv.wait(lock, [&]{ return rgbd_output_queue.size() < 5 || quitFlag.load(); });
-            if (quitFlag.load()) break;
-            rgbd_output_queue.emplace(StampedRealSenseFrame{
-                rs_rgb.clone(), rs_depth.clone(),
-                host_s.count(), host_nanosec,
-                sensor_sec, sensor_usec});
-        }
-        rgbd_cv.notify_one();
-    }
-
-    pipeline.stop();
-}
-
-// -------------------------------------------------------
-// Signal handler
-// -------------------------------------------------------
-void signal_handler(int)
-{
-    quitFlag.store(true);
-    rgbd_cv.notify_all();
-}
-
-// -------------------------------------------------------
-// main
-// -------------------------------------------------------
-int main(int argc, char **argv)
-{
-    signal(SIGINT,  signal_handler);
+int main(int argc, char** argv) {
+    signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    outputdir = "./capture";
+    std::string serial;
+    int duration_sec = 10;
+    std::string out_csv;
+
+    if (argc >= 2) serial = argv[1];
+    if (argc >= 3) duration_sec = std::max(1, std::stoi(argv[2]));
+    if (argc >= 4) out_csv = argv[3];
+
     std::cout << "Usage: " << argv[0]
-              << " (<realsense_sync_mode>) (<if_save>) (<output_dir>)\n";
+              << " [serial(optional)] [duration_sec=10] [output_csv(optional)]\n";
+    std::cout << "serial=" << (serial.empty() ? "<auto>" : serial)
+              << ", duration=" << duration_sec << "s\n";
 
-    if (argc == 2)      { realsense_sync = atoi(argv[1]); }
-    else if (argc == 3) { realsense_sync = atoi(argv[1]); if_save = atoi(argv[2]); }
-    else if (argc >= 4) { realsense_sync = atoi(argv[1]); if_save = atoi(argv[2]); outputdir = argv[3]; }
-
-    if (if_save) prepare_dirs(outputdir);
-
-    const std::string dev_rs(device_path::kRealSenseSerial);
-
-    std::thread consumer_rs(realsense_consumer);
-    std::thread producer_rs(realsense_producer, dev_rs);
-
-    std::thread display_t([]() {
-        while (!quitFlag.load()) {
-            StampedRealSenseFrame frame;
-            {
-                std::unique_lock<std::mutex> lock(rgbd_queue_mutex);
-                rgbd_cv.wait(lock, [&]{ return !rgbd_output_queue.empty() || quitFlag.load(); });
-                if (quitFlag.load()) break;
-                frame = rgbd_output_queue.front();
-            }
-            cv::Mat vis;
-            cv::normalize(frame.depth_image_raw, vis, 0, 255, cv::NORM_MINMAX);
-            vis.convertTo(vis, CV_8UC1);
-            cv::imshow("Depth_vis", vis);
-            cv::waitKey(1);
+    std::ofstream csv;
+    std::mutex csv_mutex;
+    if (!out_csv.empty()) {
+        csv.open(out_csv, std::ios::out);
+        if (!csv.is_open()) {
+            std::cerr << "Failed to open CSV: " << out_csv << std::endl;
+            return 1;
         }
-    });
+        csv << "host_ns,sensor_ns,type,x,y,z\n";
+    }
 
-    while (!quitFlag.load())
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::atomic<uint64_t> accel_count{0};
+    std::atomic<uint64_t> gyro_count{0};
+    std::atomic<uint64_t> total_count{0};
 
-    cv::destroyAllWindows();
-    producer_rs.join();
-    consumer_rs.join();
-    display_t.join();
+    rs2::pipeline pipe;
+    rs2::config cfg;
+    if (!serial.empty()) cfg.enable_device(serial);
+    cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F, 100);
+    cfg.enable_stream(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F, 200);
 
-    return EXIT_SUCCESS;
+    auto cb = [&](rs2::frame f) {
+        auto motion = f.as<rs2::motion_frame>();
+        if (!motion) return;
+
+        const rs2_stream st = motion.get_profile().stream_type();
+        if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;
+
+        const uint64_t host_ns = RealSenseProducer::host_time_ns_now();
+        const double ts_ms = motion.get_timestamp();
+        const uint64_t sensor_ns = (std::isfinite(ts_ms) && ts_ms >= 0.0)
+            ? static_cast<uint64_t>(ts_ms * 1e6)
+            : host_ns;
+        const rs2_vector d = motion.get_motion_data();
+
+        total_count.fetch_add(1, std::memory_order_relaxed);
+        if (st == RS2_STREAM_ACCEL) {
+            accel_count.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            gyro_count.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        if (csv.is_open()) {
+            std::lock_guard<std::mutex> lock(csv_mutex);
+            csv << host_ns << ","
+                << sensor_ns << ","
+                << (st == RS2_STREAM_ACCEL ? "accel" : "gyro") << ","
+                << std::fixed << std::setprecision(6)
+                << d.x << "," << d.y << "," << d.z << "\n";
+        }
+    };
+
+    try {
+        auto profile = pipe.start(cfg, cb);
+        std::cout << "IMU pipeline started.\nEnabled streams:\n";
+        for (const auto& sp : profile.get_streams()) {
+            std::cout << "  - " << sp.stream_name() << " @ " << sp.fps() << "Hz\n";
+        }
+    } catch (const rs2::error& e) {
+        std::cerr << "Failed to start IMU pipeline: " << e.what() << std::endl;
+        return 2;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    uint64_t last_total = 0;
+    while (!g_stop.load()) {
+        const auto elapsed = std::chrono::steady_clock::now() - t0;
+        if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() >= duration_sec) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        const uint64_t cur_total = total_count.load(std::memory_order_relaxed);
+        std::cout << "samples/s=" << (cur_total - last_total)
+                  << ", accel_total=" << accel_count.load()
+                  << ", gyro_total=" << gyro_count.load() << std::endl;
+        last_total = cur_total;
+    }
+
+    pipe.stop();
+    if (csv.is_open()) csv.close();
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const double sec = std::max(
+        1e-6,
+        std::chrono::duration<double>(t1 - t0).count());
+    const uint64_t a = accel_count.load();
+    const uint64_t g = gyro_count.load();
+    const uint64_t t = total_count.load();
+
+    std::cout << "Done. accel=" << a
+              << " (" << (a / sec) << " Hz)"
+              << ", gyro=" << g
+              << " (" << (g / sec) << " Hz)"
+              << ", total=" << t << std::endl;
+
+    if (t == 0) {
+        std::cerr << "No IMU sample received." << std::endl;
+        return 3;
+    }
+    return 0;
 }

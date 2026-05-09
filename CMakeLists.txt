@@ -7,24 +7,29 @@ project(camera_capturer)
 
 find_package(OpenCV REQUIRED)
 find_package(fastcdr REQUIRED)
-find_package(fastrtps REQUIRED)
 find_package(realsense2 REQUIRED)
 
-add_executable(guidemono src/guidemono.cpp)
+add_executable(guidemono src/guidemono.cpp src/producer/guide_producer.cpp src/writer/guide_writer.cpp)
 target_link_libraries(guidemono
     ${OpenCV_LIBS}
     pthread
     serial
     )
+target_include_directories(guidemono
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
+)
 
-add_executable(guidestereo src/guidestereo.cpp)
+add_executable(guidestereo src/guidestereo.cpp src/producer/guide_producer.cpp src/writer/guide_writer.cpp)
 target_link_libraries(guidestereo
     ${OpenCV_LIBS}
     pthread
     serial
     )
+target_include_directories(guidestereo
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
+)
 
-add_executable(realsense src/realsense.cpp)
+add_executable(realsense src/realsense.cpp src/producer/realsense_producer.cpp)
 target_link_libraries(realsense
     ${OpenCV_LIBS}
     pthread
@@ -34,7 +39,12 @@ target_include_directories(realsense
     PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
 )
 
-add_executable(camera_RGBDT src/camera_RGBDT.cpp)
+add_executable(camera_RGBDT
+    src/camera_RGBDT.cpp
+    src/producer/guide_producer.cpp
+    src/producer/realsense_producer.cpp
+    src/writer/guide_writer.cpp
+    src/writer/realsense_writer.cpp)
 target_link_libraries(camera_RGBDT
     ${OpenCV_LIBS}
     pthread
@@ -43,7 +53,7 @@ target_link_libraries(camera_RGBDT
     )
 
 target_include_directories(camera_RGBDT
-    PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
 )
 
 find_package(catkin QUIET)
@@ -78,13 +88,21 @@ if(USE_ROS1)
         INCLUDE_DIRS
     )
 
-    add_executable(guidestereo_node src/guidestereo_ros.cpp)
-    add_executable(camera_RGBDT_node src/camera_RGBDT_ros.cpp)
+    add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
+    add_executable(camera_RGBDT_node
+        src/ros/camera_RGBDT_ros.cpp
+        src/producer/guide_producer.cpp
+        src/producer/realsense_producer.cpp
+        src/writer/guide_writer.cpp
+        src/writer/realsense_writer.cpp)
     target_link_libraries(guidestereo_node
         ${catkin_LIBRARIES}
         pthread
         serial
         )
+    target_include_directories(guidestereo_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
+    )
     target_link_libraries(camera_RGBDT_node
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}
@@ -93,7 +111,7 @@ if(USE_ROS1)
         realsense2::realsense2
     )
     target_include_directories(camera_RGBDT_node
-        PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
 
 endif()
@@ -105,9 +123,15 @@ if(USE_ROS2)
     find_package(sensor_msgs REQUIRED)
     find_package(std_msgs REQUIRED)
     find_package(cv_bridge REQUIRED)
+    find_package(fastrtps REQUIRED)
 
-    add_executable(guidestereo_node src/guidestereo_ros.cpp)
-    add_executable(camera_RGBDT_node src/camera_RGBDT_ros.cpp)
+    add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
+    add_executable(camera_RGBDT_node
+        src/ros/camera_RGBDT_ros.cpp
+        src/producer/guide_producer.cpp
+        src/producer/realsense_producer.cpp
+        src/writer/guide_writer.cpp
+        src/writer/realsense_writer.cpp)
     ament_target_dependencies(guidestereo_node
         rclcpp
         sensor_msgs
@@ -133,6 +157,9 @@ if(USE_ROS2)
         pthread
         serial
         )
+    target_include_directories(guidestereo_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
+    )
     target_link_libraries(camera_RGBDT_node
         ${OpenCV_LIBS}
         pthread
@@ -140,7 +167,7 @@ if(USE_ROS2)
         realsense2::realsense2
     )
     target_include_directories(camera_RGBDT_node
-        PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
     install(TARGETS guidestereo_node camera_RGBDT_node
         DESTINATION lib/${PROJECT_NAME})
