@@ -1,42 +1,25 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <errno.h>
+#include <signal.h>
 #include <sys/time.h>
-#include <sys/poll.h>
+#include <unistd.h>
 
 #include <atomic>
-#include <ctime>
 #include <chrono>
-#include <condition_variable>
-#include <cstdint>
-#include <iomanip>
-
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include <opencv2/opencv.hpp>
-#include <libserial/SerialPort.h>
-#include <signal.h>
 
 #include "device_path.h"
 #include "producer/guide_producer.h"
-#include "utils/common_utils.h"
 #include "writer/guide_writer.h"
 
 int if_save = 0;
-std::vector<std::atomic<int>> if_sync(2);  // -1: no change, 0: sync off, 1: sync on
-const int kReqCount = 4;
 int tempIncre_detect = 0;
-
-using namespace LibSerial;
 
 std::atomic<bool> quitFlag(false);  // Flag to signal consumer to stop
 
@@ -75,7 +58,7 @@ bool open_writers(const std::string& base_dir) {
     return true;
 }
 
-void producer(int fps, int id)
+void producer(int id)
 {
     guides[id]->run();
 }
@@ -152,7 +135,7 @@ int main(int argc, char **argv) {
 
     std::vector<std::thread> producers;
     for (int i = 0; i < 2; ++i) {
-        producers.emplace_back(producer, trigger_fps, i);
+        producers.emplace_back(producer, i);
     }
 
     const int numDisplays = 2;

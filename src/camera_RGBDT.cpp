@@ -1,42 +1,25 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <errno.h>
+#include <signal.h>
 #include <sys/time.h>
-#include <sys/poll.h>
+#include <unistd.h>
 
-#include <algorithm>
 #include <atomic>
-#include <ctime>
 #include <chrono>
-#include <cmath>
-#include <condition_variable>
-#include <cstdint>
-#include <iomanip>
-
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
-#include <opencv2/opencv.hpp>
 #include <librealsense2/rs.hpp>
-#include <libserial/SerialPort.h>
-#include <signal.h>
+#include <opencv2/opencv.hpp>
 
 #include "device_path.h"
 #include "producer/guide_producer.h"
 #include "producer/realsense_producer.h"
-#include "utils/common_utils.h"
 #include "writer/guide_writer.h"
 #include "writer/realsense_writer.h"
-
-using namespace LibSerial;
 
 int if_save = 0;
 int rs_sync_mode = 0;

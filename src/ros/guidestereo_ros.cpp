@@ -1,29 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <errno.h>
-#include <sys/time.h>
-#include <sys/poll.h>
-
-#include <atomic>
-#include <ctime>
-#include <chrono>
-#include <condition_variable>
-#include <iomanip>
-
-#include <iostream>
+#include <cstdlib>
+#include <functional>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
-
-#include <opencv2/opencv.hpp>
-#include <libserial/SerialPort.h>
-#include <signal.h>
 
 #include "device_path.h"
 #include "producer/guide_producer.h"
@@ -31,9 +11,6 @@
 
 using ImagePublisher = Publisher<ImageMsg>;
 using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
-
-int if_save = 0;
-const int kReqCount = 4;
 
 std::unique_ptr<GuideProducer> guides[2];
 

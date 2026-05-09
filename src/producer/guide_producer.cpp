@@ -5,6 +5,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <utility>
 
 #include <fcntl.h>
 #include <linux/videodev2.h>
@@ -412,11 +413,11 @@ int GuideProducer::open_serial_port() {
     try {
         std::cout << "Opening serial port for cam_id " << cam_id_ << " via " << serial_path << std::endl;
         serial_.Open(serial_path);
-        serial_.SetBaudRate(BaudRate::BAUD_115200);
-        serial_.SetCharacterSize(CharacterSize::CHAR_SIZE_8);
-        serial_.SetParity(Parity::PARITY_NONE);
-        serial_.SetStopBits(StopBits::STOP_BITS_1);
-        serial_.SetFlowControl(FlowControl::FLOW_CONTROL_NONE);
+        serial_.SetBaudRate(LibSerial::BaudRate::BAUD_115200);
+        serial_.SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
+        serial_.SetParity(LibSerial::Parity::PARITY_NONE);
+        serial_.SetStopBits(LibSerial::StopBits::STOP_BITS_1);
+        serial_.SetFlowControl(LibSerial::FlowControl::FLOW_CONTROL_NONE);
         return 1;
     } catch (const std::exception& e) {
         std::cerr << "Open serial error (" << serial_path << "): " << e.what() << std::endl;
@@ -436,19 +437,19 @@ void GuideProducer::send_serial_command(GuideProducer::SerialCmd cmd) {
 }
 
 void GuideProducer::serial_worker() {
-    DataBuffer query_cmd = {
+    LibSerial::DataBuffer query_cmd = {
         0x55, 0xAA, 0x07, 0x00,
         0x00, 0x80, 0x00, 0x00,
         0x00, 0x00, 0x87, 0xF0
     };
 
-    DataBuffer sync_on = {
+    LibSerial::DataBuffer sync_on = {
         0x55, 0xAA, 0x07, 0x02,
         0x01, 0x01, 0x00, 0x00,
         0x00, 0x01, 0x04, 0xF0
     };
 
-    DataBuffer sync_off = {
+    LibSerial::DataBuffer sync_off = {
         0x55, 0xAA, 0x07, 0x02,
         0x01, 0x01, 0x00, 0x00,
         0x00, 0x00, 0x05, 0xF0

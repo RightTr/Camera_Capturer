@@ -3,8 +3,10 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <thread>
+#include <utility>
 
 bool RealSenseProducer::configure_sync(rs2::depth_sensor& depth_sensor, int sync_mode)
 {

@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <utility>
 
 GuideWriter::GuideWriter(std::string output_dir, std::string camera_name)
     : output_dir_(std::move(output_dir)),

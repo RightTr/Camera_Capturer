@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -15,8 +16,6 @@
 
 #include <opencv2/opencv.hpp>
 #include <libserial/SerialPort.h>
-
-using namespace LibSerial;
 
 struct GuideBuffer {
     void* start;
@@ -160,7 +159,7 @@ private:
     std::atomic<bool> stopped_{false};
 
     // Serial port members
-    SerialPort serial_;
+    LibSerial::SerialPort serial_;
     std::atomic<SerialCmd> serial_cmd_{SerialCmd::NONE};
     std::mutex serial_mutex_;
     std::condition_variable serial_cv_;
