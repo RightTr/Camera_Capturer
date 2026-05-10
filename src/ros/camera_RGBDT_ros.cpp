@@ -22,6 +22,7 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 int if_save = 0;
 int rs_sync_mode = 0;
 int tempIncre_detect = 0;
+bool use_pwm_trigger_stamp = true;
 
 std::atomic<bool> quitFlag(false);
 
@@ -39,14 +40,6 @@ ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::shared_ptr<SyncBridge> g_sync_bridge;
-
-Time stamp_from_ns(std::int64_t ns, long fallback_sec, long fallback_usec)
-{
-    if (ns != 0) {
-        return make_time_ns(static_cast<uint64_t>(ns));
-    }
-    return make_time_sec_usec(fallback_sec, fallback_usec);
-}
 
 bool open_writers(const std::string& base_dir)
 {
@@ -90,9 +83,10 @@ void rgbdt_consumer()
         if (!rs_prod->pop_rgbd(rs_frame)) break;
 
         const std::int64_t trigger_unix_ns = g_sync_bridge ? g_sync_bridge->take_trigger_unix_ns() : 0;
-        left_frame.trigger_unix_ns = trigger_unix_ns;
-        right_frame.trigger_unix_ns = trigger_unix_ns;
-        rs_frame.trigger_unix_ns = trigger_unix_ns;
+        const std::int64_t saved_trigger_unix_ns = use_pwm_trigger_stamp ? trigger_unix_ns : 0;
+        left_frame.trigger_unix_ns = saved_trigger_unix_ns;
+        right_frame.trigger_unix_ns = saved_trigger_unix_ns;
+        rs_frame.trigger_unix_ns = saved_trigger_unix_ns;
 
         if (if_save) {
             guide_writers[0]->write(left_frame);
@@ -100,16 +94,21 @@ void rgbdt_consumer()
             rs_writer->write_rgbd(rs_frame);
         }
 
-        const auto stamp = stamp_from_ns(
-            trigger_unix_ns,
-            rs_frame.sensor_sec,
-            rs_frame.sensor_microsec);
-        publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", stamp);
-        publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
-        publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", stamp);
-        publish_image(g_guide_temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", stamp);
-        publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", stamp);
-        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", stamp);
+        const auto left_stamp = saved_trigger_unix_ns != 0
+            ? make_time_ns(static_cast<uint64_t>(saved_trigger_unix_ns))
+            : make_time_sec_usec(left_frame.sensor_sec, left_frame.sensor_microsec);
+        const auto right_stamp = saved_trigger_unix_ns != 0
+            ? make_time_ns(static_cast<uint64_t>(saved_trigger_unix_ns))
+            : make_time_sec_usec(right_frame.sensor_sec, right_frame.sensor_microsec);
+        const auto rs_stamp = saved_trigger_unix_ns != 0
+            ? make_time_ns(static_cast<uint64_t>(saved_trigger_unix_ns))
+            : make_time_sec_usec(rs_frame.sensor_sec, rs_frame.sensor_microsec);
+        publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", left_stamp);
+        publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", left_stamp);
+        publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", right_stamp);
+        publish_image(g_guide_temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", right_stamp);
+        publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", rs_stamp);
+        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
     }
 }
 
@@ -148,12 +147,14 @@ int main(int argc, char **argv)
     int trigger_fps = 30;
     outputdir = "/data/home/pi/Cap";
 
-    init(argc, argv, "camera_rgbdt_node");
-    rs_sync_mode = param<int>("rs_sync_mode", 3);
-    if_save = param<int>("if_save", 0);
-    tempIncre_detect = param<int>("temp_incre_detect", 0);
-    outputdir = param<std::string>("output_dir", "/data/home/pi/Cap");
-    const int trigger_gpio = param<int>("trigger_gpio", -1);
+    ros_init(argc, argv, "camera_rgbdt_node");
+    rs_sync_mode = get_param<int>("rs_sync_mode", 3);
+    if_save = get_param<int>("if_save", 0);
+    tempIncre_detect = get_param<int>("temp_incre_detect", 0);
+    outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
+    const bool use_pwm_sync = get_param<bool>("use_pwm_sync", false);
+    use_pwm_trigger_stamp = get_param<bool>("use_pwm_trigger_stamp", true);
+    const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
@@ -169,16 +170,23 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, tempIncre_detect %d, outputdir %s\n",
-           trigger_fps, rs_sync_mode, if_save, tempIncre_detect, outputdir.c_str());
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, tempIncre_detect %d, outputdir %s, use_pwm_sync %d, use_pwm_trigger_stamp %d, pwm_line %s\n",
+           trigger_fps,
+           rs_sync_mode,
+           if_save,
+           tempIncre_detect,
+           outputdir.c_str(),
+           use_pwm_sync ? 1 : 0,
+           use_pwm_trigger_stamp ? 1 : 0,
+           pwm_line.c_str());
 
     if (if_save && !open_writers(outputdir)) {
         return EXIT_FAILURE;
     }
 
-    if (trigger_gpio >= 0) {
+    if (use_pwm_sync && !pwm_line.empty()) {
         SyncBridge::Config config;
-        config.gpio_num = trigger_gpio;
+        config.line_name = pwm_line;
         g_sync_bridge = std::make_shared<SyncBridge>(config);
         if (!g_sync_bridge->start()) {
             return EXIT_FAILURE;
@@ -254,7 +262,6 @@ int main(int argc, char **argv)
     if (g_sync_bridge) {
         g_sync_bridge->stop();
     }
-    
     shutdown();
     return EXIT_SUCCESS;
 }

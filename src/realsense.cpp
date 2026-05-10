@@ -12,6 +12,7 @@
 #include <librealsense2/rs.hpp>
 
 #include "producer/realsense_producer.h"
+#include "utils/common_utils.h"
 
 namespace {
 std::atomic<bool> g_stop(false);
@@ -47,7 +48,7 @@ int main(int argc, char** argv) {
             std::cerr << "Failed to open CSV: " << out_csv << std::endl;
             return 1;
         }
-        csv << "host_ns,sensor_ns,type,x,y,z\n";
+        csv << "host_sec,sensor_sec,type,x,y,z\n";
     }
 
     std::atomic<uint64_t> accel_count{0};
@@ -83,8 +84,9 @@ int main(int argc, char** argv) {
 
         if (csv.is_open()) {
             std::lock_guard<std::mutex> lock(csv_mutex);
-            csv << host_ns << ","
-                << sensor_ns << ","
+            csv << std::fixed << std::setprecision(9)
+                << to_sec_from_ns(host_ns) << ","
+                << to_sec_from_ns(sensor_ns) << ","
                 << (st == RS2_STREAM_ACCEL ? "accel" : "gyro") << ","
                 << std::fixed << std::setprecision(6)
                 << d.x << "," << d.y << "," << d.z << "\n";

@@ -77,7 +77,7 @@ inline void format_log_message(char *buffer, std::size_t size, const char *fmt, 
     vsnprintf(buffer, size, fmt, args);
 }
 
-inline void log_info(const char *fmt, ...)
+inline void ros_log_info(const char *fmt, ...)
 {
     char buffer[1024];
     va_list args;
@@ -91,7 +91,7 @@ inline void log_info(const char *fmt, ...)
 #endif
 }
 
-inline void log_warn(const char *fmt, ...)
+inline void ros_log_warn(const char *fmt, ...)
 {
     char buffer[1024];
     va_list args;
@@ -105,7 +105,7 @@ inline void log_warn(const char *fmt, ...)
 #endif
 }
 
-inline void log_error(const char *fmt, ...)
+inline void ros_log_error(const char *fmt, ...)
 {
     char buffer[1024];
     va_list args;
@@ -120,7 +120,7 @@ inline void log_error(const char *fmt, ...)
 }
 
 #ifdef USE_ROS1
-inline void init(int argc, char **argv, const std::string &node_name)
+inline void ros_init(int argc, char **argv, const std::string &node_name)
 {
     if (!ros::isInitialized()) {
         ros::init(argc, argv, node_name);
@@ -131,7 +131,7 @@ inline void init(int argc, char **argv, const std::string &node_name)
     }
 }
 #elif defined(USE_ROS2)
-inline void init(int argc, char **argv, const std::string &node_name)
+inline void ros_init(int argc, char **argv, const std::string &node_name)
 {
     if (!rclcpp::ok()) {
         rclcpp::init(argc, argv);
@@ -246,7 +246,7 @@ inline Subscription<MsgT> subscribe(const std::string &topic, uint32_t queue_siz
 
 #ifdef USE_ROS1
 template <typename T>
-inline T param(const std::string &name, const T &default_value)
+inline T get_param(const std::string &name, const T &default_value)
 {
     T value = default_value;
     node()->param<T>(name, value, default_value);
@@ -254,7 +254,7 @@ inline T param(const std::string &name, const T &default_value)
 }
 #elif defined(USE_ROS2)
 template <typename T>
-inline T param(const std::string &name, const T &default_value)
+inline T get_param(const std::string &name, const T &default_value)
 {
     if (!node()->has_parameter(name)) {
         node()->declare_parameter<T>(name, default_value);

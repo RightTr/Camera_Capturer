@@ -8,13 +8,14 @@
 #include <string>
 #include <thread>
 
+struct gpiod_line;
+
 class SyncBridge {
 public:
     struct Config {
-        int gpio_num = -1;
+        std::string line_name;
     };
 
-    SyncBridge();
     explicit SyncBridge(Config config);
     ~SyncBridge();
 
@@ -24,19 +25,16 @@ public:
     std::int64_t take_trigger_unix_ns();
 
 private:
-    void gpio_loop();
-    bool setup_gpio();
-    void cleanup_gpio();
-    bool open_value_fd();
-    static bool write_text(const std::string& path, const std::string& value);
-    static std::int64_t now_unix_ns();
+    void capture_loop();
+    bool setup_line();
+    void cleanup_line();
 
     Config config_;
     std::atomic<bool> running_{false};
+    std::int64_t realtime_minus_mono_ns_ = 0;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::int64_t> trigger_queue_;
-    int value_fd_ = -1;
-    bool exported_ = false;
+    gpiod_line* line_ = nullptr;
     std::thread worker_;
 };

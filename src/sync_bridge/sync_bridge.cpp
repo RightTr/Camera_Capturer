@@ -1,22 +1,44 @@
 #include "sync_bridge/sync_bridge.h"
 
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <fcntl.h>
-#include <iostream>
-#include <poll.h>
-#include <sstream>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <ctime>
+#include <gpiod.h>
 #include <utility>
 
 namespace {
 
-std::string gpio_base(int gpio_num)
+constexpr const char* kConsumerName = "camera_capturer_sync_bridge";
+constexpr int kWaitTimeoutMs = 100;
+
+void log_errno(const char* message)
 {
-    return "/sys/class/gpio/gpio" + std::to_string(gpio_num);
+    std::fprintf(stderr, "%s: %s (errno=%d)\n", message, std::strerror(errno), errno);
+}
+
+std::int64_t clock_now_ns(clockid_t clock_id)
+{
+    struct timespec ts {};
+    if (clock_gettime(clock_id, &ts) != 0) {
+        return 0;
+    }
+
+    return static_cast<std::int64_t>(ts.tv_sec) * 1000000000LL +
+           static_cast<std::int64_t>(ts.tv_nsec);
+}
+
+bool refresh_realtime_minus_mono_ns(std::int64_t& realtime_minus_mono_ns)
+{
+    const std::int64_t now_mono_ns = clock_now_ns(CLOCK_MONOTONIC);
+    const std::int64_t now_real_ns = clock_now_ns(CLOCK_REALTIME);
+    if (now_mono_ns == 0 || now_real_ns == 0) {
+        return false;
+    }
+
+    realtime_minus_mono_ns = now_real_ns - now_mono_ns;
+    return true;
 }
 
 }  // namespace
@@ -37,18 +59,19 @@ bool SyncBridge::start()
         return true;
     }
 
-    if (config_.gpio_num < 0) {
+    if (config_.line_name.empty()) {
+        std::fprintf(stderr, "SyncBridge requires pwm_line\n");
         running_.store(false);
         return false;
     }
 
-    if (!setup_gpio() || !open_value_fd()) {
-        cleanup_gpio();
+    if (!setup_line()) {
+        cleanup_line();
         running_.store(false);
         return false;
     }
 
-    worker_ = std::thread(&SyncBridge::gpio_loop, this);
+    worker_ = std::thread(&SyncBridge::capture_loop, this);
     return true;
 }
 
@@ -64,7 +87,7 @@ void SyncBridge::stop()
         worker_.join();
     }
 
-    cleanup_gpio();
+    cleanup_line();
 }
 
 std::int64_t SyncBridge::take_trigger_unix_ns()
@@ -83,102 +106,87 @@ std::int64_t SyncBridge::take_trigger_unix_ns()
     return stamp;
 }
 
-bool SyncBridge::write_text(const std::string& path, const std::string& value)
+bool SyncBridge::setup_line()
 {
-    FILE* fp = std::fopen(path.c_str(), "w");
-    if (!fp) {
+    line_ = gpiod_line_find(config_.line_name.c_str());
+    if (!line_) {
+        log_errno("gpiod_line_find failed");
         return false;
     }
-    const bool ok = std::fputs(value.c_str(), fp) >= 0;
-    std::fclose(fp);
-    return ok;
-}
 
-bool SyncBridge::setup_gpio()
-{
-    const std::string base = gpio_base(config_.gpio_num);
-    if (access(base.c_str(), F_OK) != 0) {
-        exported_ = true;
-        if (!write_text("/sys/class/gpio/export", std::to_string(config_.gpio_num))) {
-            return false;
-        }
-        for (int i = 0; i < 50; ++i) {
-            if (access(base.c_str(), F_OK) == 0) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        if (access(base.c_str(), F_OK) != 0) {
-            return false;
-        }
-    }
-
-    const std::string dir = base + "/direction";
-    const std::string edge = base + "/edge";
-    if (!write_text(dir, "in") || !write_text(edge, "rising")) {
+    if (gpiod_line_request_both_edges_events(line_, kConsumerName) < 0) {
+        log_errno("gpiod_line_request_both_edges_events failed");
+        gpiod_line_close_chip(line_);
+        line_ = nullptr;
         return false;
     }
+
     return true;
 }
 
-bool SyncBridge::open_value_fd()
+void SyncBridge::cleanup_line()
 {
-    const std::string value_path = gpio_base(config_.gpio_num) + "/value";
-    value_fd_ = ::open(value_path.c_str(), O_RDONLY | O_NONBLOCK);
-    if (value_fd_ < 0) {
-        perror("open gpio value");
-        return false;
+    if (!line_) {
+        return;
     }
 
-    char buf[8];
-    (void)::lseek(value_fd_, 0, SEEK_SET);
-    (void)::read(value_fd_, buf, sizeof(buf));
-    return true;
+    gpiod_line_release(line_);
+    gpiod_line_close_chip(line_);
+    line_ = nullptr;
 }
 
-std::int64_t SyncBridge::now_unix_ns()
+void SyncBridge::capture_loop()
 {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-}
-
-void SyncBridge::cleanup_gpio()
-{
-    if (value_fd_ >= 0) {
-        ::close(value_fd_);
-        value_fd_ = -1;
+    if (!refresh_realtime_minus_mono_ns(realtime_minus_mono_ns_)) {
+        log_errno("clock_gettime failed during SyncBridge startup");
+        return;
     }
 
-    if (exported_) {
-        (void)write_text("/sys/class/gpio/unexport", std::to_string(config_.gpio_num));
-        exported_ = false;
-    }
-}
-
-void SyncBridge::gpio_loop()
-{
-    struct pollfd pfd;
-    pfd.fd = value_fd_;
-    pfd.events = POLLPRI | POLLERR;
-    pfd.revents = 0;
+    std::int64_t last_offset_refresh_mono_ns = clock_now_ns(CLOCK_MONOTONIC);
+    constexpr std::int64_t kOffsetRefreshIntervalNs = 1000000000LL;
 
     while (running_.load(std::memory_order_relaxed)) {
-        const int ret = ::poll(&pfd, 1, 100);
+        struct timespec timeout {};
+        timeout.tv_sec = kWaitTimeoutMs / 1000;
+        timeout.tv_nsec = (kWaitTimeoutMs % 1000) * 1000000L;
+
+        const int ret = gpiod_line_event_wait(line_, &timeout);
         if (!running_.load(std::memory_order_relaxed)) {
             break;
         }
-        if (ret <= 0) {
+        if (ret < 0) {
+            log_errno("gpiod_line_event_wait failed");
+            continue;
+        }
+        if (ret == 0) {
             continue;
         }
 
-        char buf[8];
-        (void)::lseek(value_fd_, 0, SEEK_SET);
-        (void)::read(value_fd_, buf, sizeof(buf));
+        struct gpiod_line_event event {};
+        if (gpiod_line_event_read(line_, &event) < 0) {
+            log_errno("gpiod_line_event_read failed");
+            continue;
+        }
+        if (event.event_type != GPIOD_LINE_EVENT_RISING_EDGE) {
+            continue;
+        }
 
-        const std::int64_t stamp = now_unix_ns();
+        const std::int64_t rise_mono_ns =
+            static_cast<std::int64_t>(event.ts.tv_sec) * 1000000000LL +
+            static_cast<std::int64_t>(event.ts.tv_nsec);
+
+        if (rise_mono_ns >= last_offset_refresh_mono_ns &&
+            rise_mono_ns - last_offset_refresh_mono_ns >= kOffsetRefreshIntervalNs) {
+            if (refresh_realtime_minus_mono_ns(realtime_minus_mono_ns_)) {
+                last_offset_refresh_mono_ns = rise_mono_ns;
+            } else {
+                log_errno("clock_gettime failed when refreshing monotonic offset");
+            }
+        }
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            trigger_queue_.push_back(stamp);
+            trigger_queue_.push_back(rise_mono_ns + realtime_minus_mono_ns_);
             if (trigger_queue_.size() > 128) {
                 trigger_queue_.pop_front();
             }

@@ -46,3 +46,10 @@ inline std::string format_timestamp_sec_usec_as_nsec(long sec, long usec)
 {
     return format_timestamp_sec_subsec(sec, usec * 1000L, 9);
 }
+
+inline std::string format_timestamp_ns(int64_t ns)
+{
+    return format_timestamp_sec_nsec(
+        static_cast<long>(ns / 1000000000LL),
+        static_cast<long>(ns % 1000000000LL));
+}

@@ -8,6 +8,11 @@ project(camera_capturer)
 find_package(OpenCV REQUIRED)
 find_package(fastcdr REQUIRED)
 find_package(realsense2 REQUIRED)
+find_library(GPIOD_LIB gpiod)
+
+if(NOT GPIOD_LIB)
+    message(FATAL_ERROR "libgpiod not found")
+endif()
 
 add_executable(guidemono src/guidemono.cpp src/producer/guide_producer.cpp src/writer/guide_writer.cpp)
 target_link_libraries(guidemono
@@ -42,6 +47,7 @@ target_include_directories(realsense
 add_library(sync_bridge src/sync_bridge/sync_bridge.cpp)
 target_link_libraries(sync_bridge
     pthread
+    ${GPIOD_LIB}
 )
 target_include_directories(sync_bridge
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src

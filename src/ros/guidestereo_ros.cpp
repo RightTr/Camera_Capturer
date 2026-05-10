@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
     const char* dev_left = device_path::kLeftCamera;
     const char* dev_right = device_path::kRightCamera;
 
-    init(argc, argv, "guidestereo_node");
+    ros_init(argc, argv, "guidestereo_node");
 
     std::vector<ImagePublisher> image_pubs;
     image_pubs.push_back(advertise<ImageMsg>("guide_left/image", 5));
@@ -87,8 +87,8 @@ int main(int argc, char **argv) {
         producers.emplace_back([i]() { guides[i]->run(); });
     }
 
-    log_info("Camera Capturer Node is running");
-    log_info("External sync on (1) or off (0):");
+    ros_log_info("Camera Capturer Node is running");
+    ros_log_info("External sync on (1) or off (0):");
     Rate rate(10.0);
     while (ok()) {
         spin_once();

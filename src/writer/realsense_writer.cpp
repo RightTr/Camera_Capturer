@@ -8,28 +8,6 @@
 
 #include "utils/common_utils.h"
 
-namespace {
-
-std::int64_t effective_stamp_ns(const StampedRealSenseFrame& frame)
-{
-    if (frame.trigger_unix_ns != 0) {
-        return frame.trigger_unix_ns;
-    }
-    return static_cast<std::int64_t>(frame.host_sec) * 1000000000LL
-         + static_cast<std::int64_t>(frame.host_nanosec);
-}
-
-std::string format_ns(std::int64_t ns)
-{
-    const auto sec = ns / 1000000000LL;
-    const auto nsec = ns % 1000000000LL;
-    std::ostringstream oss;
-    oss << sec << "." << std::setw(9) << std::setfill('0') << nsec;
-    return oss.str();
-}
-
-}  // namespace
-
 RealSenseWriter::RealSenseWriter(std::string output_dir)
     : output_dir_(std::move(output_dir))
 {
@@ -77,8 +55,11 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
         return;
     }
 
+    const auto stamp_ns = frame.trigger_unix_ns != 0
+        ? frame.trigger_unix_ns
+        : to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
     const std::string host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-    const std::string stamp_time = format_ns(effective_stamp_ns(frame));
+    const std::string stamp_time = format_timestamp_ns(stamp_ns);
 
     time_stream_ << stamp_time << "," << host_time << std::endl;
 
