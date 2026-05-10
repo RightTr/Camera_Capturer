@@ -79,6 +79,7 @@ struct GuideFrame {
     long host_nanosec;
     long sensor_sec;
     long sensor_microsec;
+    std::int64_t trigger_unix_ns = 0;
 };
 
 class GuideProducer {
@@ -121,7 +122,6 @@ public:
 
     void set_tenfold_celsius(bool tenfold_celsius);
     void set_max_queue_size(int max_size);
-
     void run();
     bool pop(GuideFrame& frame);
     void stop();
@@ -152,7 +152,6 @@ private:
     int max_size_ = 5;
     std::function<bool()> running_;
     std::function<void()> fail_;
-
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::queue<GuideFrame> queue_;

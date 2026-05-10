@@ -39,6 +39,14 @@ target_include_directories(realsense
     PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
 )
 
+add_library(sync_bridge src/sync_bridge/sync_bridge.cpp)
+target_link_libraries(sync_bridge
+    pthread
+)
+target_include_directories(sync_bridge
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
 add_executable(camera_RGBDT
     src/camera_RGBDT.cpp
     src/producer/guide_producer.cpp
@@ -109,6 +117,7 @@ if(USE_ROS1)
         pthread
         serial
         realsense2::realsense2
+        sync_bridge
     )
     target_include_directories(camera_RGBDT_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
@@ -165,6 +174,7 @@ if(USE_ROS2)
         pthread
         serial
         realsense2::realsense2
+        sync_bridge
     )
     target_include_directories(camera_RGBDT_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}

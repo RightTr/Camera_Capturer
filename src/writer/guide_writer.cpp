@@ -6,6 +6,28 @@
 #include <sstream>
 #include <utility>
 
+namespace {
+
+std::int64_t effective_stamp_ns(const GuideFrame& frame)
+{
+    if (frame.trigger_unix_ns != 0) {
+        return frame.trigger_unix_ns;
+    }
+    return static_cast<std::int64_t>(frame.host_sec) * 1000000000LL
+         + static_cast<std::int64_t>(frame.host_nanosec);
+}
+
+std::string format_ns(std::int64_t ns)
+{
+    const auto sec = ns / 1000000000LL;
+    const auto nsec = ns % 1000000000LL;
+    std::ostringstream oss;
+    oss << sec << "." << std::setw(9) << std::setfill('0') << nsec;
+    return oss.str();
+}
+
+}  // namespace
+
 GuideWriter::GuideWriter(std::string output_dir, std::string camera_name)
     : output_dir_(std::move(output_dir)),
       camera_name_(std::move(camera_name))
@@ -36,7 +58,7 @@ bool GuideWriter::open()
         return false;
     }
 
-    time_stream_ << "sensor_sec,host_sec\n";
+    time_stream_ << "stamp_sec,host_sec\n";
     return true;
 }
 
@@ -53,11 +75,11 @@ void GuideWriter::write(const GuideFrame& frame)
         return;
     }
 
+    const auto stamp_ns = effective_stamp_ns(frame);
     const double host_sec =
         static_cast<double>(frame.host_sec) + static_cast<double>(frame.host_nanosec) * 1e-9;
-    const double sensor_sec =
-        static_cast<double>(frame.sensor_sec) + static_cast<double>(frame.sensor_microsec) * 1e-6;
-    time_stream_ << std::fixed << std::setprecision(9) << sensor_sec << "," << host_sec << std::endl;
+    time_stream_ << std::fixed << std::setprecision(9) << static_cast<double>(stamp_ns) * 1e-9
+                 << "," << host_sec << std::endl;
 
     param_stream_ << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
                   << "," << frame.param_data.humidity
@@ -79,13 +101,13 @@ void GuideWriter::write(const GuideFrame& frame)
 
     std::ostringstream ss;
     ss << output_dir_ << "/" << camera_name_ << "/image/"
-       << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ".png";
+       << format_ns(stamp_ns) << ".png";
     cv::imwrite(ss.str(), frame.gray_image);
 
     ss.str("");
     ss.clear();
     ss << output_dir_ << "/" << camera_name_ << "/temperature/"
-       << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec << ".png";
+       << format_ns(stamp_ns) << ".png";
     save_temperature_png(frame.temperature_celsius, ss.str());
 }
 

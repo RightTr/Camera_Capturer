@@ -18,6 +18,7 @@ struct StampedRealSenseFrame {
     long host_nanosec;
     long sensor_sec;
     long sensor_microsec;
+    std::int64_t trigger_unix_ns = 0;
 };
 
 struct StampedImuFrame {

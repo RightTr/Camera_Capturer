@@ -1,6 +1,7 @@
 #include <array>
 #include <atomic>
 #include <csignal>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
@@ -9,6 +10,7 @@
 #include "device_path.h"
 #include "producer/guide_producer.h"
 #include "producer/realsense_producer.h"
+#include "sync_bridge/sync_bridge.h"
 #include "utils/ros_utils.h"
 #include "writer/guide_writer.h"
 #include "writer/realsense_writer.h"
@@ -36,6 +38,15 @@ ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
+std::shared_ptr<SyncBridge> g_sync_bridge;
+
+Time stamp_from_ns(std::int64_t ns, long fallback_sec, long fallback_usec)
+{
+    if (ns != 0) {
+        return make_time_ns(static_cast<uint64_t>(ns));
+    }
+    return make_time_sec_usec(fallback_sec, fallback_usec);
+}
 
 bool open_writers(const std::string& base_dir)
 {
@@ -55,6 +66,9 @@ bool open_writers(const std::string& base_dir)
 void signal_handler(int)
 {
     quitFlag.store(true);
+    if (g_sync_bridge) {
+        g_sync_bridge->stop();
+    }
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -65,30 +79,37 @@ void signal_handler(int)
     }
 }
 
-void guide_consumer(int id)
+void rgbdt_consumer()
 {
     while (!quitFlag.load()) {
-        GuideFrame frame;
-        if (!guides[id]->pop(frame)) break;
-        if (if_save) guide_writers[id]->write(frame);
+        GuideFrame left_frame;
+        GuideFrame right_frame;
+        StampedRealSenseFrame rs_frame;
+        if (!guides[0]->pop(left_frame)) break;
+        if (!guides[1]->pop(right_frame)) break;
+        if (!rs_prod->pop_rgbd(rs_frame)) break;
 
-        const auto stamp = make_time_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-        const std::string frame_id = (id == 0) ? "guide_left" : "guide_right";
-        publish_image(g_guide_image_pubs[id], frame.gray_image, "mono8", frame_id, stamp);
-        publish_image(g_guide_temp_pubs[id], frame.temperature_celsius, "32FC1", frame_id, stamp);
-    }
-}
+        const std::int64_t trigger_unix_ns = g_sync_bridge ? g_sync_bridge->take_trigger_unix_ns() : 0;
+        left_frame.trigger_unix_ns = trigger_unix_ns;
+        right_frame.trigger_unix_ns = trigger_unix_ns;
+        rs_frame.trigger_unix_ns = trigger_unix_ns;
 
-void realsense_consumer()
-{
-    while (!quitFlag.load()) {
-        StampedRealSenseFrame frame;
-        if (!rs_prod->pop_rgbd(frame)) break;
-        if (if_save) rs_writer->write_rgbd(frame);
+        if (if_save) {
+            guide_writers[0]->write(left_frame);
+            guide_writers[1]->write(right_frame);
+            rs_writer->write_rgbd(rs_frame);
+        }
 
-        const auto stamp = make_time_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-        publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", stamp);
-        publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", stamp);
+        const auto stamp = stamp_from_ns(
+            trigger_unix_ns,
+            rs_frame.sensor_sec,
+            rs_frame.sensor_microsec);
+        publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", stamp);
+        publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
+        publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", stamp);
+        publish_image(g_guide_temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", stamp);
+        publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", stamp);
+        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", stamp);
     }
 }
 
@@ -132,6 +153,7 @@ int main(int argc, char **argv)
     if_save = param<int>("if_save", 0);
     tempIncre_detect = param<int>("temp_incre_detect", 0);
     outputdir = param<std::string>("output_dir", "/data/home/pi/Cap");
+    const int trigger_gpio = param<int>("trigger_gpio", -1);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
@@ -152,6 +174,15 @@ int main(int argc, char **argv)
 
     if (if_save && !open_writers(outputdir)) {
         return EXIT_FAILURE;
+    }
+
+    if (trigger_gpio >= 0) {
+        SyncBridge::Config config;
+        config.gpio_num = trigger_gpio;
+        g_sync_bridge = std::make_shared<SyncBridge>(config);
+        if (!g_sync_bridge->start()) {
+            return EXIT_FAILURE;
+        }
     }
 
     const char* dev_left = device_path::kLeftCamera;
@@ -192,8 +223,7 @@ int main(int argc, char **argv)
     }
 
     std::vector<std::thread> consumers;
-    for (int i = 0; i < 2; ++i) consumers.emplace_back(guide_consumer, i);
-    consumers.emplace_back(realsense_consumer);
+    consumers.emplace_back(rgbdt_consumer);
     consumers.emplace_back(imu_consumer);
 
     std::vector<std::thread> producers;
@@ -203,7 +233,6 @@ int main(int argc, char **argv)
     producers.emplace_back([]() { rs_prod->run(); });
 
     
-
     Rate rate(100.0);
     while (ok() && !quitFlag.load()) {
         spin_once();
@@ -221,6 +250,10 @@ int main(int argc, char **argv)
 
     for (auto& t : producers) t.join();
     for (auto& t : consumers) t.join();
+
+    if (g_sync_bridge) {
+        g_sync_bridge->stop();
+    }
     
     shutdown();
     return EXIT_SUCCESS;

@@ -8,6 +8,28 @@
 
 #include "utils/common_utils.h"
 
+namespace {
+
+std::int64_t effective_stamp_ns(const StampedRealSenseFrame& frame)
+{
+    if (frame.trigger_unix_ns != 0) {
+        return frame.trigger_unix_ns;
+    }
+    return static_cast<std::int64_t>(frame.host_sec) * 1000000000LL
+         + static_cast<std::int64_t>(frame.host_nanosec);
+}
+
+std::string format_ns(std::int64_t ns)
+{
+    const auto sec = ns / 1000000000LL;
+    const auto nsec = ns % 1000000000LL;
+    std::ostringstream oss;
+    oss << sec << "." << std::setw(9) << std::setfill('0') << nsec;
+    return oss.str();
+}
+
+}  // namespace
+
 RealSenseWriter::RealSenseWriter(std::string output_dir)
     : output_dir_(std::move(output_dir))
 {
@@ -36,7 +58,7 @@ bool RealSenseWriter::open()
         return false;
     }
 
-    time_stream_ << "sensor_time,host_time\n";
+    time_stream_ << "stamp_time,host_time\n";
     accel_stream_ << "host_sec,sensor_sec,ax,ay,az\n";
     gyro_stream_ << "host_sec,sensor_sec,gx,gy,gz\n";
     return true;
@@ -56,17 +78,17 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
     }
 
     const std::string host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-    const std::string sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
+    const std::string stamp_time = format_ns(effective_stamp_ns(frame));
 
-    time_stream_ << sensor_time << "," << host_time << std::endl;
+    time_stream_ << stamp_time << "," << host_time << std::endl;
 
     std::ostringstream ss;
-    ss << output_dir_ << "/realsense/rgb/" << sensor_time << ".png";
+    ss << output_dir_ << "/realsense/rgb/" << stamp_time << ".png";
     cv::imwrite(ss.str(), frame.color_image);
 
     ss.str("");
     ss.clear();
-    ss << output_dir_ << "/realsense/depth_raw/" << sensor_time << ".png";
+    ss << output_dir_ << "/realsense/depth_raw/" << stamp_time << ".png";
     cv::imwrite(ss.str(), frame.depth_image_raw);
 }
 

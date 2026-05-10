@@ -106,7 +106,6 @@ int main(int argc, char **argv) {
     for (auto& t : publishers) {
         t.join();
     }
-
     shutdown();
     return EXIT_SUCCESS;
 }

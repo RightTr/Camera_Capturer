@@ -12,6 +12,7 @@ def generate_launch_description():
     if_save = LaunchConfiguration("if_save")
     temp_incre_detect = LaunchConfiguration("temp_incre_detect")
     output_dir = LaunchConfiguration("output_dir")
+    trigger_gpio = LaunchConfiguration("trigger_gpio")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -39,6 +40,11 @@ def generate_launch_description():
             description="Output directory used when if_save is enabled.",
         ),
         DeclareLaunchArgument(
+            "trigger_gpio",
+            default_value="-1",
+            description="Orin GPIO number used to capture the external PWM trigger edge.",
+        ),
+        DeclareLaunchArgument(
             "use_rviz",
             default_value="true",
             description="Launch RViz with the packaged rgbdt.rviz config.",
@@ -53,6 +59,7 @@ def generate_launch_description():
                 "if_save": if_save,
                 "temp_incre_detect": temp_incre_detect,
                 "output_dir": output_dir,
+                "trigger_gpio": trigger_gpio,
             }],
         ),
         Node(
