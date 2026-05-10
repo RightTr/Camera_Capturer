@@ -193,9 +193,20 @@ ros2 topic pub --once /guidecam/sync std_msgs/Int32 "{data: '1'}" # Sync on
 ros2 topic pub --once /guidecam/sync std_msgs/Int32 "{data: '0'}" # Sync off
 ```
 
-## TODO
+* Guide Stereo Launch
 
-* ARM64 Adaption Test
-* ROS1/ROS2 Adaption
-* RealSense Color Image Visualization Fault
-* RealSense External Trigger Synchronization Test
+```bash
+cd cap_ws
+source install/setup.bash
+ros2 launch camera_capturer camera_stereo.launch.py
+```
+
+* RGBDT Launch
+
+```bash
+cd cap_ws
+source install/setup.bash
+ros2 launch camera_capturer camera_rgbdt.launch.py
+```
+
+* The first 10 seconds after startup are treated as a warm-up period. Frames are captured, but ROS image publishing and file saving start only after the warm-up period ends.
