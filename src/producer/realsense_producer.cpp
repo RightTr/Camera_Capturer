@@ -1,6 +1,7 @@
 #include "realsense_producer.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -39,6 +40,24 @@ bool RealSenseProducer::configure_sync(rs2::depth_sensor& depth_sensor, int sync
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Failed to configure inter-cam sync mode: " << e.what() << std::endl;
         return false;
+    }
+}
+
+void configure_frames_queue_size(rs2::sensor& sensor, int queue_size, const char* name)
+{
+    if (!sensor || !sensor.supports(RS2_OPTION_FRAMES_QUEUE_SIZE)) {
+        return;
+    }
+
+    try {
+        const rs2::option_range range = sensor.get_option_range(RS2_OPTION_FRAMES_QUEUE_SIZE);
+        const float wanted = std::min(std::max(static_cast<float>(queue_size), range.min), range.max);
+        sensor.set_option(RS2_OPTION_FRAMES_QUEUE_SIZE, wanted);
+        std::cout << "[realsense] " << name << " frames queue size set to "
+                  << sensor.get_option(RS2_OPTION_FRAMES_QUEUE_SIZE) << std::endl;
+    } catch (const rs2::error& e) {
+        std::cerr << "[realsense] Failed to set " << name
+                  << " frames queue size: " << e.what() << std::endl;
     }
 }
 
@@ -267,6 +286,8 @@ void RealSenseProducer::run()
     }
 
     rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
+    configure_frames_queue_size(color_sensor, rgb_max_, "color");
+    configure_frames_queue_size(depth_sensor, rgb_max_, "depth");
     if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
         color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
     }
@@ -338,8 +359,12 @@ void RealSenseProducer::run()
         spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
+    rs2::frame_queue frame_queue(std::max(rgb_max_ * 2, 60));
+
     try {
-        rs2::pipeline_profile profile = pipeline.start(cfg);
+        rs2::pipeline_profile profile = pipeline.start(cfg, [&](const rs2::frame& frame) {
+            frame_queue.enqueue(frame);
+        });
         if (on_start_) on_start_(profile);
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
@@ -353,9 +378,13 @@ void RealSenseProducer::run()
     }
 
     while (live()) {
-        rs2::frameset frameset;
-        if (!pipeline.poll_for_frames(&frameset)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        rs2::frame frame;
+        if (!frame_queue.poll_for_frame(&frame)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        rs2::frameset frameset = frame.as<rs2::frameset>();
+        if (!frameset) {
             continue;
         }
 

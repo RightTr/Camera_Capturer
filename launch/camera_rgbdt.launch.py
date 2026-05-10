@@ -48,7 +48,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "use_pwm_trigger_stamp",
-            default_value="true",
+            default_value="false",
             description="Use PWM trigger time as the unified ROS image timestamp. When false, each image uses its own sensor time.",
         ),
         DeclareLaunchArgument(

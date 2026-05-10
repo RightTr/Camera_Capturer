@@ -1,8 +1,11 @@
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,6 +28,7 @@ int tempIncre_detect = 0;
 bool use_pwm_trigger_stamp = true;
 
 std::atomic<bool> quitFlag(false);
+std::atomic<std::int64_t> g_trigger_unix_ns(0);
 
 std::string outputdir;
 std::unique_ptr<GuideWriter> guide_writers[2];
@@ -40,6 +44,28 @@ ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::shared_ptr<SyncBridge> g_sync_bridge;
+std::chrono::steady_clock::time_point g_output_start_at;
+
+std::int64_t current_trigger_unix_ns()
+{
+    if (!use_pwm_trigger_stamp) {
+        return 0;
+    }
+    return g_trigger_unix_ns.load(std::memory_order_relaxed);
+}
+
+Time make_frame_time(long sensor_sec, long sensor_microsec, std::int64_t trigger_unix_ns)
+{
+    if (trigger_unix_ns != 0) {
+        return make_time_ns(static_cast<uint64_t>(trigger_unix_ns));
+    }
+    return make_time_sec_usec(sensor_sec, sensor_microsec);
+}
+
+bool output_enabled()
+{
+    return std::chrono::steady_clock::now() >= g_output_start_at;
+}
 
 bool open_writers(const std::string& base_dir)
 {
@@ -72,43 +98,103 @@ void signal_handler(int)
     }
 }
 
-void rgbdt_consumer()
+void stop_capture()
+{
+    quitFlag.store(true);
+    if (rs_prod) {
+        rs_prod->stop();
+    }
+    for (int i = 0; i < 2; ++i) {
+        if (guides[i]) {
+            guides[i]->stop();
+        }
+    }
+}
+
+bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::condition_variable& cv)
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    return cv.wait_for(lock, std::chrono::seconds(10), [&] {
+        return ready.load(std::memory_order_relaxed) || quitFlag.load();
+    });
+}
+
+void trigger_consumer()
+{
+    while (!quitFlag.load() && g_sync_bridge) {
+        const std::int64_t trigger_unix_ns = g_sync_bridge->take_trigger_unix_ns();
+        if (trigger_unix_ns != 0) {
+            g_trigger_unix_ns.store(trigger_unix_ns, std::memory_order_relaxed);
+        }
+    }
+}
+
+void stereo_consumer()
 {
     while (!quitFlag.load()) {
         GuideFrame left_frame;
         GuideFrame right_frame;
-        StampedRealSenseFrame rs_frame;
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
-        if (!rs_prod->pop_rgbd(rs_frame)) break;
 
-        const std::int64_t trigger_unix_ns = g_sync_bridge ? g_sync_bridge->take_trigger_unix_ns() : 0;
-        const std::int64_t saved_trigger_unix_ns = use_pwm_trigger_stamp ? trigger_unix_ns : 0;
-        left_frame.trigger_unix_ns = saved_trigger_unix_ns;
-        right_frame.trigger_unix_ns = saved_trigger_unix_ns;
-        rs_frame.trigger_unix_ns = saved_trigger_unix_ns;
+        const std::int64_t trigger_unix_ns = current_trigger_unix_ns();
+        left_frame.trigger_unix_ns = trigger_unix_ns;
+        right_frame.trigger_unix_ns = trigger_unix_ns;
+
+        if (!output_enabled()) {
+            continue;
+        }
 
         if (if_save) {
             guide_writers[0]->write(left_frame);
             guide_writers[1]->write(right_frame);
-            rs_writer->write_rgbd(rs_frame);
         }
 
-        const auto left_stamp = saved_trigger_unix_ns != 0
-            ? make_time_ns(static_cast<uint64_t>(saved_trigger_unix_ns))
-            : make_time_sec_usec(left_frame.sensor_sec, left_frame.sensor_microsec);
-        const auto right_stamp = saved_trigger_unix_ns != 0
-            ? make_time_ns(static_cast<uint64_t>(saved_trigger_unix_ns))
-            : make_time_sec_usec(right_frame.sensor_sec, right_frame.sensor_microsec);
-        const auto rs_stamp = saved_trigger_unix_ns != 0
-            ? make_time_ns(static_cast<uint64_t>(saved_trigger_unix_ns))
-            : make_time_sec_usec(rs_frame.sensor_sec, rs_frame.sensor_microsec);
+        const auto left_stamp = make_frame_time(
+            left_frame.sensor_sec,
+            left_frame.sensor_microsec,
+            trigger_unix_ns);
+        const auto right_stamp = make_frame_time(
+            right_frame.sensor_sec,
+            right_frame.sensor_microsec,
+            trigger_unix_ns);
         publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", left_stamp);
         publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", left_stamp);
         publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", right_stamp);
         publish_image(g_guide_temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", right_stamp);
+    }
+
+    if (!quitFlag.load()) {
+        stop_capture();
+    }
+}
+
+void realsense_consumer()
+{
+    while (!quitFlag.load()) {
+        StampedRealSenseFrame rs_frame;
+        if (!rs_prod->pop_rgbd(rs_frame)) break;
+
+        rs_frame.trigger_unix_ns = current_trigger_unix_ns();
+
+        if (!output_enabled()) {
+            continue;
+        }
+
+        if (if_save) {
+            rs_writer->write_rgbd(rs_frame);
+        }
+
+        const auto rs_stamp = make_frame_time(
+            rs_frame.sensor_sec,
+            rs_frame.sensor_microsec,
+            rs_frame.trigger_unix_ns);
         publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", rs_stamp);
         publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
+    }
+
+    if (!quitFlag.load()) {
+        stop_capture();
     }
 }
 
@@ -214,31 +300,51 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    std::atomic<bool> rs_ready(false);
+    std::mutex rs_ready_mutex;
+    std::condition_variable rs_ready_cv;
+
     rs_prod = std::make_unique<RealSenseProducer>(
         dev_rs,
         [] { return !quitFlag.load(); },
-        [] { quitFlag.store(true); },
-        [](const rs2::pipeline_profile& profile) {
+        [&] {
+            quitFlag.store(true);
+            rs_ready_cv.notify_all();
+        },
+        [&](const rs2::pipeline_profile& profile) {
             if (if_save) rs_writer->write_intrinsics(profile);
+            rs_ready.store(true, std::memory_order_relaxed);
+            rs_ready_cv.notify_all();
         },
         [](double scale) {
             if (if_save) rs_writer->write_depth_scale(scale);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
 
+    std::vector<std::thread> producers;
+    producers.emplace_back([]() { rs_prod->run(); });
+
+    if (!wait_realsense_ready(rs_ready, rs_ready_mutex, rs_ready_cv)) {
+        return EXIT_FAILURE;
+    }
+
     if (!GuideProducer::start_capture_pair(guides)) {
         return EXIT_FAILURE;
     }
 
-    std::vector<std::thread> consumers;
-    consumers.emplace_back(rgbdt_consumer);
-    consumers.emplace_back(imu_consumer);
-
-    std::vector<std::thread> producers;
     for (int i = 0; i < 2; ++i) {
         producers.emplace_back([i]() { guides[i]->run(); });
     }
-    producers.emplace_back([]() { rs_prod->run(); });
+
+    std::vector<std::thread> consumers;
+    if (g_sync_bridge) {
+        consumers.emplace_back(trigger_consumer);
+    }
+    consumers.emplace_back(stereo_consumer);
+    consumers.emplace_back(realsense_consumer);
+    consumers.emplace_back(imu_consumer);
+
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
     
     Rate rate(100.0);

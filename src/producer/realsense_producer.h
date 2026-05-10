@@ -67,7 +67,7 @@ private:
     bool imu_ = true;
     bool align_ = true;
     bool filter_ = true;
-    int rgb_max_ = 5;
+    int rgb_max_ = 30;
     int imu_max_ = 200;
     std::function<bool()> running_;
     std::function<void()> fail_;
