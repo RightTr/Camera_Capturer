@@ -33,14 +33,50 @@ std::unique_ptr<RealSenseWriter> rs_writer;
 
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
+std::mutex g_display_mutex;
+std::chrono::steady_clock::time_point g_output_start_at;
 
-void guide_consumer(int id)
+bool output_enabled()
+{
+    return std::chrono::steady_clock::now() >= g_output_start_at;
+}
+
+void show_guide_frame(const GuideFrame& frame)
+{
+    cv::Mat gray_norm;
+    cv::normalize(frame.temperature_celsius, gray_norm, 0, 255, cv::NORM_MINMAX);
+    gray_norm.convertTo(gray_norm, CV_8UC1);
+    const std::string camera = GuideProducer::camera_name(frame.cam_id);
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    cv::imshow("Gray_" + camera, frame.gray_image);
+    cv::imshow("Temp_" + camera, gray_norm);
+    cv::waitKey(1);
+}
+
+void show_realsense_frame(const StampedRealSenseFrame& frame)
+{
+    cv::Mat gray_norm;
+    cv::normalize(frame.depth_image_raw, gray_norm, 0, 255, cv::NORM_MINMAX);
+    gray_norm.convertTo(gray_norm, CV_8UC1);
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    cv::imshow("Depth_vis", gray_norm);
+    cv::waitKey(1);
+}
+
+void stereo_consumer()
 {
     while (!quitFlag.load()) {
-        GuideFrame frame;
-        if (!guides[id]->pop(frame)) break;
-        if (if_save) guide_writers[id]->write(frame);
-        else std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        GuideFrame left_frame;
+        GuideFrame right_frame;
+        if (!guides[0]->pop(left_frame)) break;
+        if (!guides[1]->pop(right_frame)) break;
+        if (!output_enabled()) continue;
+        if (if_save) {
+            guide_writers[0]->write(left_frame);
+            guide_writers[1]->write(right_frame);
+        }
+        show_guide_frame(left_frame);
+        show_guide_frame(right_frame);
     }
 }
 
@@ -48,8 +84,9 @@ void realsense_consumer() {
     while (!quitFlag.load()) {
         StampedRealSenseFrame frame;
         if (!rs_prod->pop_rgbd(frame)) break;
+        if (!output_enabled()) continue;
         if (if_save) rs_writer->write_rgbd(frame);
-        else std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        show_realsense_frame(frame);
     }
 }
 
@@ -160,9 +197,10 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // Consumers
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
     std::vector<std::thread> consumers;
-    for (int i = 0; i < 2; ++i) consumers.emplace_back(guide_consumer, i);
+    consumers.emplace_back(stereo_consumer);
     consumers.emplace_back(realsense_consumer);
     consumers.emplace_back(imu_consumer);
 
@@ -172,35 +210,6 @@ int main(int argc, char **argv) {
         producers.emplace_back([i]() { guides[i]->run(); });
     }
     producers.emplace_back([]() { rs_prod->run(); });
-
-    // Display
-    std::vector<std::thread> display_threads;
-    for (int i = 0; i < 2; ++i) {
-        display_threads.emplace_back([i]() {
-            while (!quitFlag.load()) {
-                GuideFrame frame;
-                if (!guides[i]->pop(frame)) break;
-                std::string camera = GuideProducer::camera_name(frame.cam_id);
-                cv::Mat gray_norm;
-                cv::normalize(frame.temperature_celsius, gray_norm, 0, 255, cv::NORM_MINMAX);
-                gray_norm.convertTo(gray_norm, CV_8UC1);
-                cv::imshow("Gray_" + camera, frame.gray_image);
-                cv::imshow("Temp_" + camera, gray_norm);
-                cv::waitKey(1);
-            }
-        });
-    }
-    display_threads.emplace_back([]() {
-        while (!quitFlag.load()) {
-            StampedRealSenseFrame frame;
-            if (!rs_prod->pop_rgbd(frame)) break;
-            cv::Mat gray_norm;
-            cv::normalize(frame.depth_image_raw, gray_norm, 0, 255, cv::NORM_MINMAX);
-            gray_norm.convertTo(gray_norm, CV_8UC1);
-            cv::imshow("Depth_vis", gray_norm);
-            cv::waitKey(1);
-        }
-    });
 
     // Interface
     std::string sync_input;
@@ -233,8 +242,6 @@ int main(int argc, char **argv) {
 
     for (auto& t : producers)             t.join();
     for (auto& t : consumers)             t.join();
-    for (auto& t : display_threads)       t.join();
-
     interface_t.join();
     return EXIT_SUCCESS;
 }

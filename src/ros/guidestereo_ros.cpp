@@ -28,8 +28,6 @@ void publisher(int id, const ImagePublisher& image_pub, const ImagePublisher& te
     }
 }
 
-
-
 int main(int argc, char **argv) {
 
     int trigger_fps = 30;
@@ -51,15 +49,12 @@ int main(int argc, char **argv) {
         "guidecam/sync", 1,
         [&](const SyncMsgConstPtr& msg) {
             for (int i = 0; i < 2; ++i) {
-                guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
+                if (guides[i]) {
+                    guides[i]->send_serial_command(
+                        msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
+                }
             }
         });
-    std::vector<std::thread> publishers;
-
-    const int numPublishers = 2;
-    for (int i = 0; i < numPublishers; ++i) {
-        publishers.emplace_back(publisher, i, std::ref(image_pubs[i]), std::ref(temp_pubs[i]));
-    }
 
     if (!GuideProducer::create_stereo_pair(
             guides,
@@ -81,14 +76,17 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    std::vector<std::thread> publishers;
+    for (int i = 0; i < 2; ++i) {
+        publishers.emplace_back(publisher, i, std::ref(image_pubs[i]), std::ref(temp_pubs[i]));
+    }
+
     const int numProducers = 2;
     std::vector<std::thread> producers;
     for (int i = 0; i < numProducers; ++i) {
         producers.emplace_back([i]() { guides[i]->run(); });
     }
 
-    ros_log_info("Camera Capturer Node is running");
-    ros_log_info("External sync on (1) or off (0):");
     Rate rate(10.0);
     while (ok()) {
         spin_once();

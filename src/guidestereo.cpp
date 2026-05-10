@@ -29,6 +29,19 @@ std::string outputdir;
 std::unique_ptr<GuideWriter> guide_writers[2];
 
 std::unique_ptr<GuideProducer> guides[2];
+std::mutex g_display_mutex;
+
+void show_frame(const GuideFrame& frame)
+{
+    cv::Mat gray_norm;
+    cv::normalize(frame.temperature_celsius, gray_norm, 0, 255, cv::NORM_MINMAX);
+    gray_norm.convertTo(gray_norm, CV_8UC1);
+    const std::string camera = GuideProducer::camera_name(frame.cam_id);
+    std::lock_guard<std::mutex> lock(g_display_mutex);
+    cv::imshow("Gray_" + camera, frame.gray_image);
+    cv::imshow("Temp_" + camera, gray_norm);
+    cv::waitKey(1);
+}
 
 void consumer(int id)
 {
@@ -42,7 +55,7 @@ void consumer(int id)
             guide_writers[id]->write(frame); 
             if (tempIncre_detect) count++;
         }
-        else std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        show_frame(frame);
     }
 }
 
@@ -98,13 +111,6 @@ int main(int argc, char **argv) {
     const char* dev_left = device_path::kLeftCamera;
     const char* dev_right = device_path::kRightCamera;
 
-    std::vector<std::thread> consumers;
-    // Start consumer threads
-    const int numConsumers = 2;
-    for (int i = 0; i < numConsumers; ++i) {
-        consumers.emplace_back(consumer, i);
-    }
-
     for (auto& v : tempIncre) {
         v.store(false);
     }
@@ -133,28 +139,14 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    std::vector<std::thread> consumers;
+    for (int i = 0; i < 2; ++i) {
+        consumers.emplace_back(consumer, i);
+    }
+
     std::vector<std::thread> producers;
     for (int i = 0; i < 2; ++i) {
         producers.emplace_back(producer, i);
-    }
-
-    const int numDisplays = 2;
-    std::vector<std::thread> display_threads;
-    for (int i = 0; i < numDisplays; ++i) {
-        display_threads.emplace_back([i]() {
-            while(!quitFlag.load()){
-                GuideFrame frame;
-                if (!guides[i]->pop(frame)) break;
-
-                std::string camera = GuideProducer::camera_name(frame.cam_id);
-                cv::Mat gray_norm;
-                cv::normalize(frame.temperature_celsius, gray_norm, 0, 255, cv::NORM_MINMAX);
-                gray_norm.convertTo(gray_norm, CV_8UC1);
-                cv::imshow("Gray_" + camera, frame.gray_image);
-                cv::imshow("Temp_" + camera, gray_norm);
-                cv::waitKey(1);
-            }   
-        });
     }
 
     std::string sync_input;
@@ -200,10 +192,6 @@ int main(int argc, char **argv) {
         t.join();
     }
     
-    for (auto& t : display_threads) {
-        t.join();
-    }
-
     interface_t.join();
 
     return EXIT_SUCCESS;
