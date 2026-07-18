@@ -493,7 +493,7 @@ void GuideProducer::serial_worker() {
                         if (byte == 0xF0) break;
                         buffer.push_back(byte);
                     }
-                    if ((buffer[0] != 0xAA) || (buffer.size() != 22)) continue;
+                    if (buffer.size() != 22 || buffer[0] != 0xAA) continue;
                     auto now = std::chrono::system_clock::now();
                     focal_temp = (static_cast<uint16_t>(buffer[9]) << 8) | static_cast<uint16_t>(buffer[10]);
                     auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
@@ -511,6 +511,18 @@ void GuideProducer::serial_worker() {
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("timeout") != std::string::npos) continue;
             std::cerr << "Cam " << cam_id_ << " serial error: " << e.what() << std::endl;
+            try {
+                if (serial_.IsOpen()) {
+                    serial_.Close();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (live()) {
+                    open_serial_port();
+                }
+            } catch (const std::exception& reopen_error) {
+                std::cerr << "Cam " << cam_id_ << " serial reopen error: "
+                          << reopen_error.what() << std::endl;
+            }
         }
     }
 }

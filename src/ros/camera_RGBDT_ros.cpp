@@ -320,6 +320,7 @@ int main(int argc, char **argv)
             if (if_save) rs_writer->write_depth_scale(scale);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
+    rs_prod->set_imu_queue_size(400);
 
     std::vector<std::thread> producers;
     producers.emplace_back([]() { rs_prod->run(); });
@@ -328,7 +329,18 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
+    std::vector<std::thread> consumers;
+    consumers.emplace_back(realsense_consumer);
+    consumers.emplace_back(imu_consumer);
+
     if (!GuideProducer::start_capture_pair(guides)) {
+        quitFlag.store(true);
+        if (rs_prod) rs_prod->stop();
+        for (auto& t : consumers) {
+            if (t.joinable()) t.join();
+        }
         return EXIT_FAILURE;
     }
 
@@ -336,17 +348,11 @@ int main(int argc, char **argv)
         producers.emplace_back([i]() { guides[i]->run(); });
     }
 
-    std::vector<std::thread> consumers;
     if (g_sync_bridge) {
         consumers.emplace_back(trigger_consumer);
     }
     consumers.emplace_back(stereo_consumer);
-    consumers.emplace_back(realsense_consumer);
-    consumers.emplace_back(imu_consumer);
 
-    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-
-    
     Rate rate(100.0);
     while (ok() && !quitFlag.load()) {
         spin_once();
