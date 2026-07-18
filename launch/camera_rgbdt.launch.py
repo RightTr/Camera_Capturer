@@ -28,7 +28,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "if_save",
-            default_value="1",
+            default_value="0",
             description="Save captured data to disk when non-zero.",
         ),
         DeclareLaunchArgument(
@@ -38,7 +38,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "output_dir",
-            default_value="/data/home/pi/Cap",
+            default_value="/home/pi/Cap_ws",
             description="Output directory used when if_save is enabled.",
         ),
         DeclareLaunchArgument(

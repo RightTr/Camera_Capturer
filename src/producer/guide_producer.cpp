@@ -15,6 +15,8 @@
 #include <sys/poll.h>
 #include <unistd.h>
 
+#include "device_path.h"
+
 namespace {
 
 constexpr int kWidth = 640;
@@ -386,8 +388,8 @@ void GuideProducer::cleanup_capture()
 }
 
 std::string GuideProducer::get_serial_path() const {
-    if (cam_id_ == 0) return "/dev/guide_left";
-    if (cam_id_ == 1) return "/dev/guide_right";
+    if (cam_id_ == 0) return device_path::kLeftUart;
+    if (cam_id_ == 1) return device_path::kRightUart;
     return "unknown";
 }
 
