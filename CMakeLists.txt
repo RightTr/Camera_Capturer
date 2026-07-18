@@ -103,6 +103,9 @@ if(USE_ROS1)
     )
 
     add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
+    add_executable(realsense_node
+        src/ros/realsense_ros.cpp
+        src/producer/realsense_producer.cpp)
     add_executable(camera_RGBDT_node
         src/ros/camera_RGBDT_ros.cpp
         src/producer/guide_producer.cpp
@@ -125,7 +128,16 @@ if(USE_ROS1)
         realsense2::realsense2
         sync_bridge
     )
+    target_link_libraries(realsense_node
+        ${catkin_LIBRARIES}
+        ${OpenCV_LIBS}
+        pthread
+        realsense2::realsense2
+    )
     target_include_directories(camera_RGBDT_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    )
+    target_include_directories(realsense_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
 
@@ -141,6 +153,9 @@ if(USE_ROS2)
     find_package(fastrtps REQUIRED)
 
     add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
+    add_executable(realsense_node
+        src/ros/realsense_ros.cpp
+        src/producer/realsense_producer.cpp)
     add_executable(camera_RGBDT_node
         src/ros/camera_RGBDT_ros.cpp
         src/producer/guide_producer.cpp
@@ -154,6 +169,11 @@ if(USE_ROS2)
         cv_bridge
     )
     ament_target_dependencies(camera_RGBDT_node
+        rclcpp
+        sensor_msgs
+        std_msgs
+    )
+    ament_target_dependencies(realsense_node
         rclcpp
         sensor_msgs
         std_msgs
@@ -182,14 +202,26 @@ if(USE_ROS2)
         realsense2::realsense2
         sync_bridge
     )
+    target_link_libraries(realsense_node
+        ${OpenCV_LIBS}
+        pthread
+        realsense2::realsense2
+    )
     target_include_directories(camera_RGBDT_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
-    install(TARGETS guidestereo_node camera_RGBDT_node
+    target_include_directories(realsense_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    )
+    install(TARGETS guidestereo_node realsense_node camera_RGBDT_node
         DESTINATION lib/${PROJECT_NAME})
-    install(DIRECTORY launch
-        DESTINATION share/${PROJECT_NAME})
-    install(DIRECTORY rviz_cfg
-        DESTINATION share/${PROJECT_NAME})
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
+        install(DIRECTORY launch
+            DESTINATION share/${PROJECT_NAME})
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rviz_cfg")
+        install(DIRECTORY rviz_cfg
+            DESTINATION share/${PROJECT_NAME})
+    endif()
     ament_package() # Don't forget this
 endif()
