@@ -383,8 +383,6 @@ void SyncBridge::push_serial_stamp(std::int64_t stamp_ns)
     std::lock_guard<std::mutex> lock(mutex_);
     serial_stamp_queue_.push_back(stamp_ns);
     while (serial_stamp_queue_.size() > config_.max_queue_size) {
-        std::fprintf(stderr, "Dropping unmatched serial timestamp: %lld ns\n",
-                     static_cast<long long>(serial_stamp_queue_.front()));
         serial_stamp_queue_.pop_front();
     }
     if (match_pending_locked()) {
@@ -397,17 +395,6 @@ void SyncBridge::push_gpio_event()
     std::lock_guard<std::mutex> lock(mutex_);
     ++pending_gpio_events_;
     if (pending_gpio_events_ > config_.max_queue_size) {
-        std::fprintf(stderr,
-                     "Dropping unmatched PWM GPIO event on %s "
-                     "(gpio_events=%llu, serial_bytes=%llu, serial_frames=%llu, unmatched_serial=%zu)\n",
-                     config_.pwm_line.c_str(),
-                     static_cast<unsigned long long>(
-                         gpio_events_received_.load(std::memory_order_relaxed)),
-                     static_cast<unsigned long long>(
-                         serial_bytes_received_.load(std::memory_order_relaxed)),
-                     static_cast<unsigned long long>(
-                         serial_frames_received_.load(std::memory_order_relaxed)),
-                     serial_stamp_queue_.size());
         --pending_gpio_events_;
     }
     if (match_pending_locked()) {
@@ -512,9 +499,9 @@ void SyncBridge::serial_loop()
                 const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
                 const auto stamp_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
                 serial_frames_received_.fetch_add(1, std::memory_order_relaxed);
-                std::printf("Serial trigger frame received: count=%u, utc=%llu us\n",
+                std::printf("Serial trigger time received: count=%u, unix_ns=%lld\n",
                             trigger_count,
-                            static_cast<unsigned long long>(utc_time_us));
+                            static_cast<long long>(stamp_ns));
                 push_serial_stamp(stamp_ns);
             }
             state = ParseState::HEAD0;
