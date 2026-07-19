@@ -1,13 +1,31 @@
 #include "sync_bridge/sync_bridge.h"
 
+#include <array>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <cstdio>
 #include <string>
 #include <utility>
 
+#include <gpiod.h>
 #include <libserial/SerialPort.h>
 
 namespace {
+
+constexpr const char* kConsumerName = "camera_capturer_sync_bridge";
+constexpr int kGpioWaitTimeoutMs = 100;
+constexpr unsigned char kFrameHead0 = 0xEE;
+constexpr unsigned char kFrameHead1 = 0xFE;
+constexpr unsigned char kMasterTriggerCmd = 0x86;
+constexpr unsigned char kMasterTriggerPayloadLen = 0x0C;
+constexpr unsigned char kFrameTail0 = 0xAA;
+constexpr unsigned char kFrameTail1 = 0xDD;
+
+void log_errno(const char* message)
+{
+    std::fprintf(stderr, "%s: %s (errno=%d)\n", message, std::strerror(errno), errno);
+}
 
 LibSerial::BaudRate baud_rate_from_int(int baud)
 {
@@ -22,6 +40,23 @@ LibSerial::BaudRate baud_rate_from_int(int baud)
     case 921600: return LibSerial::BaudRate::BAUD_921600;
     default: return LibSerial::BaudRate::BAUD_115200;
     }
+}
+
+std::uint32_t read_u32_le(const unsigned char* data)
+{
+    return static_cast<std::uint32_t>(data[0]) |
+           (static_cast<std::uint32_t>(data[1]) << 8) |
+           (static_cast<std::uint32_t>(data[2]) << 16) |
+           (static_cast<std::uint32_t>(data[3]) << 24);
+}
+
+std::uint64_t read_u64_le(const unsigned char* data)
+{
+    std::uint64_t value = 0;
+    for (int i = 0; i < 8; ++i) {
+        value |= static_cast<std::uint64_t>(data[i]) << (8 * i);
+    }
+    return value;
 }
 
 }  // namespace
@@ -47,6 +82,11 @@ bool SyncBridge::start()
         running_.store(false);
         return false;
     }
+    if (config_.pwm_line.empty()) {
+        std::fprintf(stderr, "SyncBridge requires pwm_line\n");
+        running_.store(false);
+        return false;
+    }
 
     serial_ = new LibSerial::SerialPort();
     if (!open_serial()) {
@@ -54,8 +94,15 @@ bool SyncBridge::start()
         running_.store(false);
         return false;
     }
+    if (!setup_gpio()) {
+        cleanup_gpio();
+        close_serial();
+        running_.store(false);
+        return false;
+    }
 
-    worker_ = std::thread(&SyncBridge::serial_loop, this);
+    serial_worker_ = std::thread(&SyncBridge::serial_loop, this);
+    gpio_worker_ = std::thread(&SyncBridge::gpio_loop, this);
     return true;
 }
 
@@ -67,10 +114,14 @@ void SyncBridge::stop()
 
     cv_.notify_all();
 
-    if (worker_.joinable()) {
-        worker_.join();
+    if (serial_worker_.joinable()) {
+        serial_worker_.join();
+    }
+    if (gpio_worker_.joinable()) {
+        gpio_worker_.join();
     }
 
+    cleanup_gpio();
     close_serial();
 }
 
@@ -126,22 +177,105 @@ void SyncBridge::close_serial()
     serial_ = nullptr;
 }
 
-void SyncBridge::push_stamp(std::int64_t stamp_ns)
+bool SyncBridge::setup_gpio()
+{
+    gpio_line_ = gpiod_line_find(config_.pwm_line.c_str());
+    if (!gpio_line_) {
+        log_errno("gpiod_line_find failed");
+        return false;
+    }
+
+    if (gpiod_line_request_rising_edge_events(gpio_line_, kConsumerName) < 0) {
+        log_errno("gpiod_line_request_rising_edge_events failed");
+        gpiod_line_close_chip(gpio_line_);
+        gpio_line_ = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+void SyncBridge::cleanup_gpio()
+{
+    if (!gpio_line_) {
+        return;
+    }
+
+    gpiod_line_release(gpio_line_);
+    gpiod_line_close_chip(gpio_line_);
+    gpio_line_ = nullptr;
+}
+
+void SyncBridge::push_serial_stamp(std::int64_t stamp_ns)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    stamp_queue_.push_back(stamp_ns);
-    while (stamp_queue_.size() > config_.max_queue_size) {
-        stamp_queue_.pop_front();
+    serial_stamp_queue_.push_back(stamp_ns);
+    while (serial_stamp_queue_.size() > config_.max_queue_size) {
+        std::fprintf(stderr, "Dropping unmatched serial timestamp: %lld ns\n",
+                     static_cast<long long>(serial_stamp_queue_.front()));
+        serial_stamp_queue_.pop_front();
     }
-    cv_.notify_one();
+    if (match_pending_locked()) {
+        cv_.notify_one();
+    }
+}
+
+void SyncBridge::push_gpio_event()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++pending_gpio_events_;
+    if (pending_gpio_events_ > config_.max_queue_size) {
+        std::fprintf(stderr, "Dropping unmatched PWM GPIO event on %s\n",
+                     config_.pwm_line.c_str());
+        --pending_gpio_events_;
+    }
+    if (match_pending_locked()) {
+        cv_.notify_one();
+    }
+}
+
+bool SyncBridge::match_pending_locked()
+{
+    bool matched = false;
+    while (pending_gpio_events_ > 0 && !serial_stamp_queue_.empty()) {
+        const std::int64_t stamp_ns = serial_stamp_queue_.front();
+        serial_stamp_queue_.pop_front();
+        --pending_gpio_events_;
+
+        stamp_queue_.push_back(stamp_ns);
+        while (stamp_queue_.size() > config_.max_queue_size) {
+            stamp_queue_.pop_front();
+        }
+
+        std::printf("PWM trigger matched on %s: %lld ns\n",
+                    config_.pwm_line.c_str(),
+                    static_cast<long long>(stamp_ns));
+        matched = true;
+    }
+    return matched;
 }
 
 void SyncBridge::serial_loop()
 {
-    std::string line;
+    enum class ParseState {
+        HEAD0,
+        HEAD1,
+        CMD,
+        LEN,
+        PAYLOAD,
+        CHECKSUM,
+        TAIL0,
+        TAIL1
+    };
+
+    ParseState state = ParseState::HEAD0;
+    std::array<unsigned char, kMasterTriggerPayloadLen> payload {};
+    std::size_t payload_index = 0;
+
     while (running_.load(std::memory_order_relaxed)) {
+        unsigned char byte = 0;
         try {
-            serial_->ReadLine(line, '\n', 100);
+            serial_->ReadByte(byte, 100);
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("timeout") != std::string::npos) {
                 continue;
@@ -150,13 +284,86 @@ void SyncBridge::serial_loop()
             break;
         }
 
-        try {
-            const auto stamp_ns = static_cast<std::int64_t>(std::stoll(line));
-            std::printf("PWM trigger received: %lld ns\n", static_cast<long long>(stamp_ns));
-            push_stamp(stamp_ns);
-        } catch (const std::exception&) {
-            std::fprintf(stderr, "Invalid time serial stamp: %s\n", line.c_str());
+        switch (state) {
+        case ParseState::HEAD0:
+            if (byte == kFrameHead0) {
+                state = ParseState::HEAD1;
+            }
+            break;
+        case ParseState::HEAD1:
+            if (byte == kFrameHead1) {
+                state = ParseState::CMD;
+            } else {
+                state = byte == kFrameHead0 ? ParseState::HEAD1 : ParseState::HEAD0;
+            }
+            break;
+        case ParseState::CMD:
+            state = byte == kMasterTriggerCmd ? ParseState::LEN : ParseState::HEAD0;
+            break;
+        case ParseState::LEN:
+            if (byte == kMasterTriggerPayloadLen) {
+                payload_index = 0;
+                state = ParseState::PAYLOAD;
+            } else {
+                state = ParseState::HEAD0;
+            }
+            break;
+        case ParseState::PAYLOAD:
+            payload[payload_index++] = byte;
+            if (payload_index == payload.size()) {
+                state = ParseState::CHECKSUM;
+            }
+            break;
+        case ParseState::CHECKSUM:
+            state = ParseState::TAIL0;
+            break;
+        case ParseState::TAIL0:
+            state = byte == kFrameTail0 ? ParseState::TAIL1 : ParseState::HEAD0;
+            break;
+        case ParseState::TAIL1:
+            if (byte == kFrameTail1) {
+                const std::uint32_t trigger_count = read_u32_le(payload.data());
+                const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
+                const auto stamp_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
+                std::printf("Serial trigger frame received: count=%u, utc=%llu us\n",
+                            trigger_count,
+                            static_cast<unsigned long long>(utc_time_us));
+                push_serial_stamp(stamp_ns);
+            }
+            state = ParseState::HEAD0;
+            break;
         }
-        line.clear();
+    }
+}
+
+void SyncBridge::gpio_loop()
+{
+    while (running_.load(std::memory_order_relaxed)) {
+        struct timespec timeout {};
+        timeout.tv_sec = kGpioWaitTimeoutMs / 1000;
+        timeout.tv_nsec = (kGpioWaitTimeoutMs % 1000) * 1000000L;
+
+        const int ret = gpiod_line_event_wait(gpio_line_, &timeout);
+        if (!running_.load(std::memory_order_relaxed)) {
+            break;
+        }
+        if (ret < 0) {
+            log_errno("gpiod_line_event_wait failed");
+            continue;
+        }
+        if (ret == 0) {
+            continue;
+        }
+
+        struct gpiod_line_event event {};
+        if (gpiod_line_event_read(gpio_line_, &event) < 0) {
+            log_errno("gpiod_line_event_read failed");
+            continue;
+        }
+        if (event.event_type != GPIOD_LINE_EVENT_RISING_EDGE) {
+            continue;
+        }
+
+        push_gpio_event();
     }
 }

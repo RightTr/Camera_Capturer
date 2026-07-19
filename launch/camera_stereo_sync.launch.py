@@ -12,6 +12,7 @@ def generate_launch_description():
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
+    pwm_line = LaunchConfiguration("pwm_line")
     if_save = LaunchConfiguration("if_save")
     output_dir = LaunchConfiguration("output_dir")
     rviz_config = PathJoinSubstitution(
@@ -40,6 +41,11 @@ def generate_launch_description():
             description="Baud rate for the board timestamp serial port.",
         ),
         DeclareLaunchArgument(
+            "pwm_line",
+            default_value="PAA.00",
+            description="GPIO line on the Orin that receives the PWM sync signal.",
+        ),
+        DeclareLaunchArgument(
             "if_save",
             default_value="0",
             description="Save synchronized guide images and stereo timestamp CSV when nonzero.",
@@ -58,6 +64,7 @@ def generate_launch_description():
                 "guide_query_ms": guide_query_ms,
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
+                "pwm_line": pwm_line,
                 "if_save": if_save,
                 "output_dir": output_dir,
             }],

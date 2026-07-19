@@ -94,6 +94,7 @@ int main(int argc, char **argv) {
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
+    const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
     const int if_save = get_param<int>("if_save", 0);
     const std::string outputdir = get_param<std::string>("output_dir", "./capture");
 
@@ -144,6 +145,7 @@ int main(int argc, char **argv) {
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;
     sync_config.serial_baud = serial_baud;
+    sync_config.pwm_line = pwm_line;
     SyncBridge sync_bridge(sync_config);
     if (!sync_bridge.start()) {
         return EXIT_FAILURE;
