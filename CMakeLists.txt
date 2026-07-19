@@ -117,6 +117,12 @@ if(USE_ROS1)
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
         src/writer/realsense_writer.cpp)
+    add_executable(camera_RGBDT_sync_node
+        src/ros/camera_RGBDT_sync_ros.cpp
+        src/producer/guide_producer.cpp
+        src/producer/realsense_producer.cpp
+        src/writer/guide_writer.cpp
+        src/writer/realsense_writer.cpp)
     target_link_libraries(guidestereo_node
         ${catkin_LIBRARIES}
         pthread
@@ -142,6 +148,14 @@ if(USE_ROS1)
         serial
         realsense2::realsense2
     )
+    target_link_libraries(camera_RGBDT_sync_node
+        ${catkin_LIBRARIES}
+        ${OpenCV_LIBS}
+        pthread
+        serial
+        sync_bridge
+        realsense2::realsense2
+    )
     target_link_libraries(realsense_node
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}
@@ -149,6 +163,9 @@ if(USE_ROS1)
         realsense2::realsense2
     )
     target_include_directories(camera_RGBDT_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    )
+    target_include_directories(camera_RGBDT_sync_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
     target_include_directories(realsense_node
@@ -180,6 +197,12 @@ if(USE_ROS2)
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
         src/writer/realsense_writer.cpp)
+    add_executable(camera_RGBDT_sync_node
+        src/ros/camera_RGBDT_sync_ros.cpp
+        src/producer/guide_producer.cpp
+        src/producer/realsense_producer.cpp
+        src/writer/guide_writer.cpp
+        src/writer/realsense_writer.cpp)
     ament_target_dependencies(guidestereo_node
         rclcpp
         sensor_msgs
@@ -193,6 +216,11 @@ if(USE_ROS2)
         cv_bridge
     )
     ament_target_dependencies(camera_RGBDT_node
+        rclcpp
+        sensor_msgs
+        std_msgs
+    )
+    ament_target_dependencies(camera_RGBDT_sync_node
         rclcpp
         sensor_msgs
         std_msgs
@@ -234,6 +262,13 @@ if(USE_ROS2)
         serial
         realsense2::realsense2
     )
+    target_link_libraries(camera_RGBDT_sync_node
+        ${OpenCV_LIBS}
+        pthread
+        serial
+        sync_bridge
+        realsense2::realsense2
+    )
     target_link_libraries(realsense_node
         ${OpenCV_LIBS}
         pthread
@@ -242,10 +277,13 @@ if(USE_ROS2)
     target_include_directories(camera_RGBDT_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
+    target_include_directories(camera_RGBDT_sync_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
+    )
     target_include_directories(realsense_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
-    install(TARGETS guidestereo_node guidestereo_sync_node realsense_node camera_RGBDT_node
+    install(TARGETS guidestereo_node guidestereo_sync_node realsense_node camera_RGBDT_node camera_RGBDT_sync_node
         DESTINATION lib/${PROJECT_NAME})
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
         install(DIRECTORY launch
