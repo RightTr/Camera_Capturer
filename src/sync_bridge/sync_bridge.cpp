@@ -15,12 +15,16 @@ namespace {
 
 constexpr const char* kConsumerName = "camera_capturer_sync_bridge";
 constexpr int kGpioWaitTimeoutMs = 100;
+constexpr unsigned char kRxFrameHead0 = 0xFF;
+constexpr unsigned char kRxFrameHead1 = 0xFE;
 constexpr unsigned char kTxFrameHead0 = 0xEE;
 constexpr unsigned char kTxFrameHead1 = 0xFE;
+constexpr unsigned char kSetMasterStreamCmd = 0x0C;
 constexpr unsigned char kMasterTriggerCmd = 0x86;
 constexpr unsigned char kMasterTriggerPayloadLen = 0x0C;
 constexpr unsigned char kFrameTail0 = 0xAA;
 constexpr unsigned char kFrameTail1 = 0xDD;
+constexpr int kControlReadTimeoutMs = 150;
 constexpr int kControlMaxFrameLen = 64;
 
 void log_errno(const char* message)
@@ -56,6 +60,15 @@ std::uint64_t read_u64_le(const unsigned char* data)
     std::uint64_t value = 0;
     for (int i = 0; i < 8; ++i) {
         value |= static_cast<std::uint64_t>(data[i]) << (8 * i);
+    }
+    return value;
+}
+
+unsigned char checksum(unsigned char cmd, const std::vector<unsigned char>& payload)
+{
+    unsigned char value = cmd ^ static_cast<unsigned char>(payload.size());
+    for (const unsigned char byte : payload) {
+        value ^= byte;
     }
     return value;
 }
@@ -106,7 +119,13 @@ bool SyncBridge::start()
         running_.store(false);
         return false;
     }
+    if (!set_master_stream(true)) {
+        close_serial();
+        running_.store(false);
+        return false;
+    }
     if (!setup_gpio()) {
+        set_master_stream(false);
         cleanup_gpio();
         close_serial();
         running_.store(false);
@@ -138,6 +157,7 @@ void SyncBridge::stop()
         gpio_worker_.join();
     }
 
+    set_master_stream(false);
     cleanup_gpio();
     close_serial();
 }
@@ -195,6 +215,132 @@ void SyncBridge::close_serial()
 
     delete serial_;
     serial_ = nullptr;
+}
+
+bool SyncBridge::set_master_stream(bool enabled)
+{
+    return send_control_request(
+        kSetMasterStreamCmd,
+        {static_cast<unsigned char>(enabled ? 1 : 0)},
+        kSetMasterStreamCmd);
+}
+
+bool SyncBridge::send_control_request(unsigned char cmd,
+                                      const std::vector<unsigned char>& payload,
+                                      unsigned char expected_cmd)
+{
+    if (!serial_ || !serial_->IsOpen()) {
+        std::fprintf(stderr, "Cannot send sync-board command: serial is not open\n");
+        return false;
+    }
+
+    std::vector<unsigned char> frame;
+    frame.reserve(payload.size() + 7);
+    frame.push_back(kRxFrameHead0);
+    frame.push_back(kRxFrameHead1);
+    frame.push_back(cmd);
+    frame.push_back(static_cast<unsigned char>(payload.size()));
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    frame.push_back(checksum(cmd, payload));
+    frame.push_back(kFrameTail0);
+    frame.push_back(kFrameTail1);
+
+    try {
+        serial_->Write(frame);
+        serial_->DrainWriteBuffer();
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+        enum class State {
+            HEAD0,
+            HEAD1,
+            CMD,
+            LEN,
+            PAYLOAD,
+            CHECKSUM,
+            TAIL0,
+            TAIL1
+        };
+
+        State state = State::HEAD0;
+        unsigned char response_cmd = 0;
+        unsigned char length = 0;
+        unsigned char received_checksum = 0;
+        std::vector<unsigned char> response_payload;
+
+        while (std::chrono::steady_clock::now() < deadline) {
+            unsigned char byte = 0;
+            try {
+                serial_->ReadByte(byte, kControlReadTimeoutMs);
+            } catch (const std::exception& e) {
+                if (std::string(e.what()).find("timeout") != std::string::npos) {
+                    continue;
+                }
+                throw;
+            }
+
+            switch (state) {
+            case State::HEAD0:
+                if (byte == kTxFrameHead0) {
+                    state = State::HEAD1;
+                }
+                break;
+            case State::HEAD1:
+                if (byte == kTxFrameHead1) {
+                    state = State::CMD;
+                } else {
+                    state = byte == kTxFrameHead0 ? State::HEAD1 : State::HEAD0;
+                }
+                break;
+            case State::CMD:
+                response_cmd = byte;
+                state = State::LEN;
+                break;
+            case State::LEN:
+                length = byte;
+                if (length > kControlMaxFrameLen) {
+                    state = State::HEAD0;
+                    break;
+                }
+                response_payload.clear();
+                response_payload.reserve(length);
+                state = length == 0 ? State::CHECKSUM : State::PAYLOAD;
+                break;
+            case State::PAYLOAD:
+                response_payload.push_back(byte);
+                if (response_payload.size() == length) {
+                    state = State::CHECKSUM;
+                }
+                break;
+            case State::CHECKSUM:
+                received_checksum = byte;
+                state = State::TAIL0;
+                break;
+            case State::TAIL0:
+                state = byte == kFrameTail0 ? State::TAIL1 : State::HEAD0;
+                break;
+            case State::TAIL1:
+                if (byte == kFrameTail1 &&
+                    received_checksum == checksum(response_cmd, length, response_payload.data())) {
+                    if (response_cmd == kMasterTriggerCmd) {
+                        state = State::HEAD0;
+                        break;
+                    }
+                    if (response_cmd == expected_cmd) {
+                        std::printf("Sync-board command 0x%02X acknowledged\n", cmd);
+                        return true;
+                    }
+                }
+                state = State::HEAD0;
+                break;
+            }
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Sync-board command 0x%02X failed: %s\n", cmd, e.what());
+        return false;
+    }
+
+    std::fprintf(stderr, "Sync-board command 0x%02X timed out\n", cmd);
+    return false;
 }
 
 void SyncBridge::handle_serial_frame(unsigned char cmd,

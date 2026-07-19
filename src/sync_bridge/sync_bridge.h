@@ -37,6 +37,10 @@ private:
     void gpio_loop();
     bool open_serial();
     void close_serial();
+    bool set_master_stream(bool enabled);
+    bool send_control_request(unsigned char cmd,
+                              const std::vector<unsigned char>& payload,
+                              unsigned char expected_cmd);
     void handle_serial_frame(unsigned char cmd,
                              const std::vector<unsigned char>& payload);
     bool setup_gpio();
