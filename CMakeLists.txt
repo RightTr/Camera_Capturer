@@ -8,11 +8,15 @@ project(camera_capturer)
 find_package(OpenCV REQUIRED)
 find_package(fastcdr REQUIRED)
 find_package(realsense2 REQUIRED)
-find_library(GPIOD_LIB gpiod)
 
-if(NOT GPIOD_LIB)
-    message(FATAL_ERROR "libgpiod not found")
-endif()
+add_library(sync_bridge src/sync_bridge/sync_bridge.cpp)
+target_link_libraries(sync_bridge
+    pthread
+    serial
+)
+target_include_directories(sync_bridge
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 
 add_executable(guidemono src/guidemono.cpp src/producer/guide_producer.cpp src/writer/guide_writer.cpp)
 target_link_libraries(guidemono
@@ -42,15 +46,6 @@ target_link_libraries(realsense
     )
 target_include_directories(realsense
     PRIVATE ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
-)
-
-add_library(sync_bridge src/sync_bridge/sync_bridge.cpp)
-target_link_libraries(sync_bridge
-    pthread
-    ${GPIOD_LIB}
-)
-target_include_directories(sync_bridge
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 add_executable(camera_RGBDT
@@ -103,6 +98,10 @@ if(USE_ROS1)
     )
 
     add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
+    add_executable(guidestereo_sync_node
+        src/ros/guidestereo_sync_ros.cpp
+        src/producer/guide_producer.cpp
+        src/writer/guide_writer.cpp)
     add_executable(realsense_node
         src/ros/realsense_ros.cpp
         src/producer/realsense_producer.cpp)
@@ -117,7 +116,17 @@ if(USE_ROS1)
         pthread
         serial
         )
+    target_link_libraries(guidestereo_sync_node
+        ${catkin_LIBRARIES}
+        ${OpenCV_LIBS}
+        pthread
+        serial
+        sync_bridge
+        )
     target_include_directories(guidestereo_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
+    )
+    target_include_directories(guidestereo_sync_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(camera_RGBDT_node
@@ -126,7 +135,6 @@ if(USE_ROS1)
         pthread
         serial
         realsense2::realsense2
-        sync_bridge
     )
     target_link_libraries(realsense_node
         ${catkin_LIBRARIES}
@@ -153,6 +161,10 @@ if(USE_ROS2)
     find_package(fastrtps REQUIRED)
 
     add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
+    add_executable(guidestereo_sync_node
+        src/ros/guidestereo_sync_ros.cpp
+        src/producer/guide_producer.cpp
+        src/writer/guide_writer.cpp)
     add_executable(realsense_node
         src/ros/realsense_ros.cpp
         src/producer/realsense_producer.cpp)
@@ -163,6 +175,12 @@ if(USE_ROS2)
         src/writer/guide_writer.cpp
         src/writer/realsense_writer.cpp)
     ament_target_dependencies(guidestereo_node
+        rclcpp
+        sensor_msgs
+        std_msgs
+        cv_bridge
+    )
+    ament_target_dependencies(guidestereo_sync_node
         rclcpp
         sensor_msgs
         std_msgs
@@ -192,7 +210,16 @@ if(USE_ROS2)
         pthread
         serial
         )
+    target_link_libraries(guidestereo_sync_node
+        ${OpenCV_LIBS}
+        pthread
+        serial
+        sync_bridge
+        )
     target_include_directories(guidestereo_node
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
+    )
+    target_include_directories(guidestereo_sync_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(camera_RGBDT_node
@@ -200,7 +227,6 @@ if(USE_ROS2)
         pthread
         serial
         realsense2::realsense2
-        sync_bridge
     )
     target_link_libraries(realsense_node
         ${OpenCV_LIBS}
@@ -213,7 +239,7 @@ if(USE_ROS2)
     target_include_directories(realsense_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
-    install(TARGETS guidestereo_node realsense_node camera_RGBDT_node
+    install(TARGETS guidestereo_node guidestereo_sync_node realsense_node camera_RGBDT_node
         DESTINATION lib/${PROJECT_NAME})
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
         install(DIRECTORY launch

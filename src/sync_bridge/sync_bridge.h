@@ -8,12 +8,16 @@
 #include <string>
 #include <thread>
 
-struct gpiod_line;
+namespace LibSerial {
+class SerialPort;
+}
 
 class SyncBridge {
 public:
     struct Config {
-        std::string line_name;
+        std::string serial_port;
+        int serial_baud = 115200;
+        std::size_t max_queue_size = 256;
     };
 
     explicit SyncBridge(Config config);
@@ -25,16 +29,16 @@ public:
     std::int64_t take_trigger_unix_ns();
 
 private:
-    void capture_loop();
-    bool setup_line();
-    void cleanup_line();
+    void serial_loop();
+    bool open_serial();
+    void close_serial();
+    void push_stamp(std::int64_t stamp_ns);
 
     Config config_;
     std::atomic<bool> running_{false};
-    std::int64_t realtime_minus_mono_ns_ = 0;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::deque<std::int64_t> trigger_queue_;
-    gpiod_line* line_ = nullptr;
+    std::deque<std::int64_t> stamp_queue_;
     std::thread worker_;
+    LibSerial::SerialPort* serial_ = nullptr;
 };

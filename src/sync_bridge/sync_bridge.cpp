@@ -1,44 +1,27 @@
 #include "sync_bridge/sync_bridge.h"
 
 #include <chrono>
-#include <cerrno>
 #include <cstdio>
-#include <cstring>
-#include <ctime>
-#include <gpiod.h>
+#include <string>
 #include <utility>
+
+#include <libserial/SerialPort.h>
 
 namespace {
 
-constexpr const char* kConsumerName = "camera_capturer_sync_bridge";
-constexpr int kWaitTimeoutMs = 100;
-
-void log_errno(const char* message)
+LibSerial::BaudRate baud_rate_from_int(int baud)
 {
-    std::fprintf(stderr, "%s: %s (errno=%d)\n", message, std::strerror(errno), errno);
-}
-
-std::int64_t clock_now_ns(clockid_t clock_id)
-{
-    struct timespec ts {};
-    if (clock_gettime(clock_id, &ts) != 0) {
-        return 0;
+    switch (baud) {
+    case 9600: return LibSerial::BaudRate::BAUD_9600;
+    case 19200: return LibSerial::BaudRate::BAUD_19200;
+    case 38400: return LibSerial::BaudRate::BAUD_38400;
+    case 57600: return LibSerial::BaudRate::BAUD_57600;
+    case 115200: return LibSerial::BaudRate::BAUD_115200;
+    case 230400: return LibSerial::BaudRate::BAUD_230400;
+    case 460800: return LibSerial::BaudRate::BAUD_460800;
+    case 921600: return LibSerial::BaudRate::BAUD_921600;
+    default: return LibSerial::BaudRate::BAUD_115200;
     }
-
-    return static_cast<std::int64_t>(ts.tv_sec) * 1000000000LL +
-           static_cast<std::int64_t>(ts.tv_nsec);
-}
-
-bool refresh_realtime_minus_mono_ns(std::int64_t& realtime_minus_mono_ns)
-{
-    const std::int64_t now_mono_ns = clock_now_ns(CLOCK_MONOTONIC);
-    const std::int64_t now_real_ns = clock_now_ns(CLOCK_REALTIME);
-    if (now_mono_ns == 0 || now_real_ns == 0) {
-        return false;
-    }
-
-    realtime_minus_mono_ns = now_real_ns - now_mono_ns;
-    return true;
 }
 
 }  // namespace
@@ -59,19 +42,20 @@ bool SyncBridge::start()
         return true;
     }
 
-    if (config_.line_name.empty()) {
-        std::fprintf(stderr, "SyncBridge requires pwm_line\n");
+    if (config_.serial_port.empty()) {
+        std::fprintf(stderr, "SyncBridge requires serial_port\n");
         running_.store(false);
         return false;
     }
 
-    if (!setup_line()) {
-        cleanup_line();
+    serial_ = new LibSerial::SerialPort();
+    if (!open_serial()) {
+        close_serial();
         running_.store(false);
         return false;
     }
 
-    worker_ = std::thread(&SyncBridge::capture_loop, this);
+    worker_ = std::thread(&SyncBridge::serial_loop, this);
     return true;
 }
 
@@ -87,110 +71,92 @@ void SyncBridge::stop()
         worker_.join();
     }
 
-    cleanup_line();
+    close_serial();
 }
 
 std::int64_t SyncBridge::take_trigger_unix_ns()
 {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait_for(lock, std::chrono::milliseconds(20), [&] {
-        return !trigger_queue_.empty() || !running_.load(std::memory_order_relaxed);
+        return !stamp_queue_.empty() || !running_.load(std::memory_order_relaxed);
     });
 
-    if (trigger_queue_.empty()) {
+    if (stamp_queue_.empty()) {
         return 0;
     }
 
-    const std::int64_t stamp = trigger_queue_.front();
-    trigger_queue_.pop_front();
+    const std::int64_t stamp = stamp_queue_.front();
+    stamp_queue_.pop_front();
     return stamp;
 }
 
-bool SyncBridge::setup_line()
+bool SyncBridge::open_serial()
 {
-    line_ = gpiod_line_find(config_.line_name.c_str());
-    if (!line_) {
-        log_errno("gpiod_line_find failed");
+    try {
+        serial_->Open(config_.serial_port);
+        serial_->SetBaudRate(baud_rate_from_int(config_.serial_baud));
+        serial_->SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
+        serial_->SetParity(LibSerial::Parity::PARITY_NONE);
+        serial_->SetStopBits(LibSerial::StopBits::STOP_BITS_1);
+        serial_->SetFlowControl(LibSerial::FlowControl::FLOW_CONTROL_NONE);
+        return true;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Failed to open time serial port %s: %s\n",
+                     config_.serial_port.c_str(),
+                     e.what());
         return false;
     }
-
-    if (gpiod_line_request_both_edges_events(line_, kConsumerName) < 0) {
-        log_errno("gpiod_line_request_both_edges_events failed");
-        gpiod_line_close_chip(line_);
-        line_ = nullptr;
-        return false;
-    }
-
-    return true;
 }
 
-void SyncBridge::cleanup_line()
+void SyncBridge::close_serial()
 {
-    if (!line_) {
+    if (!serial_) {
         return;
     }
 
-    gpiod_line_release(line_);
-    gpiod_line_close_chip(line_);
-    line_ = nullptr;
-}
-
-void SyncBridge::capture_loop()
-{
-    if (!refresh_realtime_minus_mono_ns(realtime_minus_mono_ns_)) {
-        log_errno("clock_gettime failed during SyncBridge startup");
-        return;
+    try {
+        if (serial_->IsOpen()) {
+            serial_->Close();
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Failed to close time serial port: %s\n", e.what());
     }
 
-    std::int64_t last_offset_refresh_mono_ns = clock_now_ns(CLOCK_MONOTONIC);
-    constexpr std::int64_t kOffsetRefreshIntervalNs = 1000000000LL;
+    delete serial_;
+    serial_ = nullptr;
+}
 
+void SyncBridge::push_stamp(std::int64_t stamp_ns)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    stamp_queue_.push_back(stamp_ns);
+    while (stamp_queue_.size() > config_.max_queue_size) {
+        stamp_queue_.pop_front();
+    }
+    cv_.notify_one();
+}
+
+void SyncBridge::serial_loop()
+{
+    std::string line;
     while (running_.load(std::memory_order_relaxed)) {
-        struct timespec timeout {};
-        timeout.tv_sec = kWaitTimeoutMs / 1000;
-        timeout.tv_nsec = (kWaitTimeoutMs % 1000) * 1000000L;
-
-        const int ret = gpiod_line_event_wait(line_, &timeout);
-        if (!running_.load(std::memory_order_relaxed)) {
+        try {
+            serial_->ReadLine(line, '\n', 100);
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find("timeout") != std::string::npos) {
+                continue;
+            }
+            std::fprintf(stderr, "Time serial read error: %s\n", e.what());
             break;
         }
-        if (ret < 0) {
-            log_errno("gpiod_line_event_wait failed");
-            continue;
-        }
-        if (ret == 0) {
-            continue;
-        }
 
-        struct gpiod_line_event event {};
-        if (gpiod_line_event_read(line_, &event) < 0) {
-            log_errno("gpiod_line_event_read failed");
-            continue;
+        try {
+            const auto stamp_ns = static_cast<std::int64_t>(std::stoll(line));
+            std::printf("PWM trigger received: %lld ns\n", static_cast<long long>(stamp_ns));
+            push_stamp(stamp_ns);
+        } catch (const std::exception&) {
+            std::fprintf(stderr, "Invalid time serial stamp: %s\n", line.c_str());
         }
-        if (event.event_type != GPIOD_LINE_EVENT_RISING_EDGE) {
-            continue;
-        }
-
-        const std::int64_t rise_mono_ns =
-            static_cast<std::int64_t>(event.ts.tv_sec) * 1000000000LL +
-            static_cast<std::int64_t>(event.ts.tv_nsec);
-
-        if (rise_mono_ns >= last_offset_refresh_mono_ns &&
-            rise_mono_ns - last_offset_refresh_mono_ns >= kOffsetRefreshIntervalNs) {
-            if (refresh_realtime_minus_mono_ns(realtime_minus_mono_ns_)) {
-                last_offset_refresh_mono_ns = rise_mono_ns;
-            } else {
-                log_errno("clock_gettime failed when refreshing monotonic offset");
-            }
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            trigger_queue_.push_back(rise_mono_ns + realtime_minus_mono_ns_);
-            if (trigger_queue_.size() > 128) {
-                trigger_queue_.pop_front();
-            }
-        }
-        cv_.notify_one();
+        line.clear();
     }
 }
