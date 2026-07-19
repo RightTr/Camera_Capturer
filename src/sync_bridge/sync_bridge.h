@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace LibSerial {
 class SerialPort;
@@ -36,6 +37,10 @@ private:
     void gpio_loop();
     bool open_serial();
     void close_serial();
+    bool set_master_stream(bool enabled);
+    bool send_control_request(unsigned char cmd,
+                              const std::vector<unsigned char>& payload,
+                              unsigned char expected_cmd);
     bool setup_gpio();
     void cleanup_gpio();
     void push_serial_stamp(std::int64_t stamp_ns);
