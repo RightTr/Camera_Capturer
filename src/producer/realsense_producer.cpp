@@ -131,14 +131,19 @@ void RealSenseProducer::set_sync_mode(int sync_mode)
     sync_mode_ = sync_mode;
 }
 
-void RealSenseProducer::set_fps(int fps)
+void RealSenseProducer::set_camera_fps(int camera_fps)
 {
-    fps_ = fps;
+    camera_fps_ = camera_fps;
 }
 
 void RealSenseProducer::set_imu_enabled(bool imu)
 {
     imu_ = imu;
+}
+
+void RealSenseProducer::set_imu_fps(int imu_fps)
+{
+    imu_fps_ = imu_fps;
 }
 
 void RealSenseProducer::set_align_enabled(bool align)
@@ -190,14 +195,15 @@ bool RealSenseProducer::push_rgbd(StampedRealSenseFrame&& frame)
 
 bool RealSenseProducer::push_imu(StampedImuFrame&& frame)
 {
-    std::lock_guard<std::mutex> lock(imu_mutex_);
+    std::unique_lock<std::mutex> lock(imu_mutex_);
+    imu_cv_.wait(lock, [&] {
+        return imu_queue_.size() < static_cast<size_t>(imu_max_) || !live();
+    });
     if (!live()) {
         return false;
     }
-    if (imu_queue_.size() >= static_cast<size_t>(imu_max_)) {
-        return true;
-    }
     imu_queue_.emplace(std::move(frame));
+    lock.unlock();
     imu_cv_.notify_one();
     return true;
 }
@@ -311,17 +317,23 @@ void RealSenseProducer::run()
 
             std::vector<rs2::stream_profile> motion_profiles;
             for (rs2_stream st : {RS2_STREAM_ACCEL, RS2_STREAM_GYRO}) {
-                rs2::stream_profile best;
-                int best_fps = 0;
+                rs2::stream_profile selected;
                 for (auto& p : motion_sensor.get_stream_profiles()) {
                     auto mp = p.as<rs2::motion_stream_profile>();
                     if (!mp || mp.stream_type() != st) continue;
-                    if (mp.fps() > best_fps) {
-                        best_fps = mp.fps();
-                        best = p;
+                    if (mp.fps() == imu_fps_) {
+                        selected = p;
+                        break;
                     }
                 }
-                if (best) motion_profiles.push_back(best);
+                if (selected) {
+                    motion_profiles.push_back(selected);
+                } else {
+                    std::cerr << "[realsense] Requested "
+                              << (st == RS2_STREAM_ACCEL ? "accel" : "gyro")
+                              << " fps " << imu_fps_
+                              << " is not supported by this device" << std::endl;
+                }
             }
 
             if (!motion_profiles.empty()) {
@@ -346,8 +358,8 @@ void RealSenseProducer::run()
     rs2::pipeline pipeline;
     rs2::config cfg;
     if (!dev_.empty()) cfg.enable_device(dev_);
-    cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, fps_);
-    cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, fps_);
+    cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, camera_fps_);
+    cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, camera_fps_);
 
     rs2::align align_to_color(RS2_STREAM_COLOR);
     rs2::spatial_filter spatial_filter;

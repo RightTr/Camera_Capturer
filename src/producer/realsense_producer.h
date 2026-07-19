@@ -43,8 +43,9 @@ public:
     static void save_depth_scale(double scale, const std::string& output_dir);
 
     void set_sync_mode(int sync_mode);
-    void set_fps(int fps);
+    void set_camera_fps(int camera_fps);
     void set_imu_enabled(bool imu);
+    void set_imu_fps(int imu_fps);
     void set_align_enabled(bool align);
     void set_filter_enabled(bool filter);
     void set_rgb_queue_size(int rgb_max);
@@ -63,8 +64,9 @@ private:
 
     std::string dev_;
     int sync_mode_ = 0;
-    int fps_ = 30;
+    int camera_fps_ = 30;
     bool imu_ = true;
+    int imu_fps_ = 200;
     bool align_ = true;
     bool filter_ = true;
     int rgb_max_ = 30;

@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
     rs2::pipeline pipe;
     rs2::config cfg;
     if (!serial.empty()) cfg.enable_device(serial);
-    cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F, 100);
+    cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F, 200);
     cfg.enable_stream(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F, 200);
 
     auto cb = [&](rs2::frame f) {

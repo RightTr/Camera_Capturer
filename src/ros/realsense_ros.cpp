@@ -87,6 +87,7 @@ int main(int argc, char **argv)
     const int rs_sync_mode = get_param<int>("rs_sync_mode", 0);
     const int fps = get_param<int>("fps", 30);
     const bool enable_imu = get_param<bool>("enable_imu", true);
+    const int imu_fps = get_param<int>("imu_fps", 200);
     const bool enable_align = get_param<bool>("enable_align", true);
     const bool enable_filter = get_param<bool>("enable_filter", true);
     const int rgb_queue_size = get_param<int>("rgb_queue_size", 30);
@@ -113,8 +114,9 @@ int main(int argc, char **argv)
             rs_ready_cv.notify_all();
         });
     rs_prod->set_sync_mode(rs_sync_mode);
-    rs_prod->set_fps(fps);
+    rs_prod->set_camera_fps(fps);
     rs_prod->set_imu_enabled(enable_imu);
+    rs_prod->set_imu_fps(imu_fps);
     rs_prod->set_align_enabled(enable_align);
     rs_prod->set_filter_enabled(enable_filter);
     rs_prod->set_rgb_queue_size(rgb_queue_size);

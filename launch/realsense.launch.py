@@ -12,6 +12,7 @@ def generate_launch_description():
     rs_sync_mode = LaunchConfiguration("rs_sync_mode")
     fps = LaunchConfiguration("fps")
     enable_imu = LaunchConfiguration("enable_imu")
+    imu_fps = LaunchConfiguration("imu_fps")
     enable_align = LaunchConfiguration("enable_align")
     enable_filter = LaunchConfiguration("enable_filter")
     rgb_queue_size = LaunchConfiguration("rgb_queue_size")
@@ -36,6 +37,11 @@ def generate_launch_description():
             "enable_imu",
             default_value="true",
             description="Enable RealSense accel and gyro publishing.",
+        ),
+        DeclareLaunchArgument(
+            "imu_fps",
+            default_value="200",
+            description="RealSense accel and gyro frame rate.",
         ),
         DeclareLaunchArgument(
             "enable_align",
@@ -71,6 +77,7 @@ def generate_launch_description():
                 "rs_sync_mode": ParameterValue(rs_sync_mode, value_type=int),
                 "fps": ParameterValue(fps, value_type=int),
                 "enable_imu": ParameterValue(enable_imu, value_type=bool),
+                "imu_fps": ParameterValue(imu_fps, value_type=int),
                 "enable_align": ParameterValue(enable_align, value_type=bool),
                 "enable_filter": ParameterValue(enable_filter, value_type=bool),
                 "rgb_queue_size": ParameterValue(rgb_queue_size, value_type=int),

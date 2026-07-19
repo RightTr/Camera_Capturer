@@ -37,8 +37,8 @@ bool RealSenseWriter::open()
     }
 
     time_stream_ << "stamp_time,host_time\n";
-    accel_stream_ << "host_sec,sensor_sec,ax,ay,az\n";
-    gyro_stream_ << "host_sec,sensor_sec,gx,gy,gz\n";
+    accel_stream_ << "host_ns,sensor_ns,host_sec,sensor_sec,ax,ay,az\n";
+    gyro_stream_ << "host_ns,sensor_ns,host_sec,sensor_sec,gx,gy,gz\n";
     return true;
 }
 
@@ -86,6 +86,8 @@ void RealSenseWriter::write_imu(const StampedImuFrame& frame)
     }
 
     (*out) << std::fixed << std::setprecision(9)
+           << frame.host_ns << ","
+           << frame.sensor_ns << ","
            << to_sec_from_ns(frame.host_ns) << ","
            << to_sec_from_ns(frame.sensor_ns) << ","
            << std::fixed << std::setprecision(6)

@@ -203,6 +203,11 @@ void imu_consumer()
     for (;;) {
         StampedImuFrame frame;
         if (!rs_prod->pop_imu(frame)) break;
+
+        if (!output_enabled()) {
+            continue;
+        }
+
         if (if_save) rs_writer->write_imu(frame);
 
         if (frame.stream_type == RS2_STREAM_ACCEL) {
@@ -320,6 +325,7 @@ int main(int argc, char **argv)
             if (if_save) rs_writer->write_depth_scale(scale);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
+    rs_prod->set_imu_fps(200);
     rs_prod->set_imu_queue_size(400);
 
     std::vector<std::thread> producers;

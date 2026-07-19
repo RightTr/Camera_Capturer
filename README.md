@@ -209,4 +209,12 @@ source install/setup.bash
 ros2 launch camera_capturer camera_rgbdt.launch.py
 ```
 
+* RealSense Launch
+
+```bash
+cd cap_ws
+source install/setup.bash
+ros2 launch camera_capturer realsense.launch.py
+```
+
 * The first 10 seconds after startup are treated as a warm-up period. Frames are captured, but ROS image publishing and file saving start only after the warm-up period ends.
