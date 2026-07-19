@@ -101,6 +101,11 @@ bool SyncBridge::start()
         return false;
     }
 
+    std::printf("SyncBridge started: serial_port=%s, serial_baud=%d, pwm_line=%s\n",
+                config_.serial_port.c_str(),
+                config_.serial_baud,
+                config_.pwm_line.c_str());
+
     serial_worker_ = std::thread(&SyncBridge::serial_loop, this);
     gpio_worker_ = std::thread(&SyncBridge::gpio_loop, this);
     return true;
@@ -150,6 +155,9 @@ bool SyncBridge::open_serial()
         serial_->SetParity(LibSerial::Parity::PARITY_NONE);
         serial_->SetStopBits(LibSerial::StopBits::STOP_BITS_1);
         serial_->SetFlowControl(LibSerial::FlowControl::FLOW_CONTROL_NONE);
+        std::printf("Opened time serial port %s at %d baud\n",
+                    config_.serial_port.c_str(),
+                    config_.serial_baud);
         return true;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to open time serial port %s: %s\n",
@@ -192,6 +200,8 @@ bool SyncBridge::setup_gpio()
         return false;
     }
 
+    std::printf("Listening for PWM rising edges on GPIO line %s\n",
+                config_.pwm_line.c_str());
     return true;
 }
 
@@ -225,8 +235,17 @@ void SyncBridge::push_gpio_event()
     std::lock_guard<std::mutex> lock(mutex_);
     ++pending_gpio_events_;
     if (pending_gpio_events_ > config_.max_queue_size) {
-        std::fprintf(stderr, "Dropping unmatched PWM GPIO event on %s\n",
-                     config_.pwm_line.c_str());
+        std::fprintf(stderr,
+                     "Dropping unmatched PWM GPIO event on %s "
+                     "(gpio_events=%llu, serial_bytes=%llu, serial_frames=%llu, unmatched_serial=%zu)\n",
+                     config_.pwm_line.c_str(),
+                     static_cast<unsigned long long>(
+                         gpio_events_received_.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(
+                         serial_bytes_received_.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(
+                         serial_frames_received_.load(std::memory_order_relaxed)),
+                     serial_stamp_queue_.size());
         --pending_gpio_events_;
     }
     if (match_pending_locked()) {
@@ -276,6 +295,7 @@ void SyncBridge::serial_loop()
         unsigned char byte = 0;
         try {
             serial_->ReadByte(byte, 100);
+            serial_bytes_received_.fetch_add(1, std::memory_order_relaxed);
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("timeout") != std::string::npos) {
                 continue;
@@ -325,6 +345,7 @@ void SyncBridge::serial_loop()
                 const std::uint32_t trigger_count = read_u32_le(payload.data());
                 const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
                 const auto stamp_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
+                serial_frames_received_.fetch_add(1, std::memory_order_relaxed);
                 std::printf("Serial trigger frame received: count=%u, utc=%llu us\n",
                             trigger_count,
                             static_cast<unsigned long long>(utc_time_us));
@@ -364,6 +385,7 @@ void SyncBridge::gpio_loop()
             continue;
         }
 
+        gpio_events_received_.fetch_add(1, std::memory_order_relaxed);
         push_gpio_event();
     }
 }

@@ -20,7 +20,7 @@ public:
         std::string serial_port;
         std::string pwm_line = "PAA.00";
         int serial_baud = 115200;
-        std::size_t max_queue_size = 256;
+        std::size_t max_queue_size = 4096;
     };
 
     explicit SyncBridge(Config config);
@@ -44,6 +44,9 @@ private:
 
     Config config_;
     std::atomic<bool> running_{false};
+    std::atomic<std::uint64_t> serial_bytes_received_{0};
+    std::atomic<std::uint64_t> serial_frames_received_{0};
+    std::atomic<std::uint64_t> gpio_events_received_{0};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::int64_t> serial_stamp_queue_;

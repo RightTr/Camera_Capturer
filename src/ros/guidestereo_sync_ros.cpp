@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 #include <fstream>
@@ -95,6 +96,7 @@ int main(int argc, char **argv) {
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
+    const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
     const int if_save = get_param<int>("if_save", 0);
     const std::string outputdir = get_param<std::string>("output_dir", "./capture");
 
@@ -146,6 +148,7 @@ int main(int argc, char **argv) {
     sync_config.serial_port = serial_port;
     sync_config.serial_baud = serial_baud;
     sync_config.pwm_line = pwm_line;
+    sync_config.max_queue_size = static_cast<std::size_t>(std::max(1, sync_queue_size));
     SyncBridge sync_bridge(sync_config);
     if (!sync_bridge.start()) {
         return EXIT_FAILURE;

@@ -13,6 +13,7 @@ def generate_launch_description():
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
     pwm_line = LaunchConfiguration("pwm_line")
+    sync_queue_size = LaunchConfiguration("sync_queue_size")
     if_save = LaunchConfiguration("if_save")
     output_dir = LaunchConfiguration("output_dir")
     rviz_config = PathJoinSubstitution(
@@ -46,6 +47,11 @@ def generate_launch_description():
             description="GPIO line on the Orin that receives the PWM sync signal.",
         ),
         DeclareLaunchArgument(
+            "sync_queue_size",
+            default_value="4096",
+            description="Maximum unmatched GPIO/serial sync events kept for FIFO pairing.",
+        ),
+        DeclareLaunchArgument(
             "if_save",
             default_value="0",
             description="Save synchronized guide images and stereo timestamp CSV when nonzero.",
@@ -65,6 +71,7 @@ def generate_launch_description():
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
                 "pwm_line": pwm_line,
+                "sync_queue_size": sync_queue_size,
                 "if_save": if_save,
                 "output_dir": output_dir,
             }],
