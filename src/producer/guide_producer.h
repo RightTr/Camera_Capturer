@@ -122,6 +122,7 @@ public:
 
     void set_tenfold_celsius(bool tenfold_celsius);
     void set_max_queue_size(int max_size);
+    void set_serial_query_interval_ms(int interval_ms);
     void run();
     bool pop(GuideFrame& frame);
     void stop();
@@ -150,6 +151,7 @@ private:
     unsigned int buffer_count_ = 4;
     bool tenfold_celsius_ = false;
     int max_size_ = 5;
+    int serial_query_interval_ms_ = 100;
     std::function<bool()> running_;
     std::function<void()> fail_;
     mutable std::mutex mutex_;

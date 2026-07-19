@@ -36,6 +36,7 @@ int main(int argc, char **argv) {
     const char* dev_right = device_path::kRightCamera;
 
     ros_init(argc, argv, "guidestereo_node");
+    const int guide_query_ms = get_param<int>("guide_query_ms", 100);
 
     std::vector<ImagePublisher> image_pubs;
     image_pubs.push_back(advertise<ImageMsg>("guide_left/image", 5));
@@ -66,6 +67,7 @@ int main(int argc, char **argv) {
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(true);
+        guide->set_serial_query_interval_ms(guide_query_ms);
     }
 
     if (!GuideProducer::start_serial_pair(guides)) {

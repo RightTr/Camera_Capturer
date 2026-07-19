@@ -234,6 +234,11 @@ void GuideProducer::set_max_queue_size(int max_size)
     max_size_ = max_size;
 }
 
+void GuideProducer::set_serial_query_interval_ms(int interval_ms)
+{
+    serial_query_interval_ms_ = std::max(1, interval_ms);
+}
+
 bool GuideProducer::live() const
 {
     return !stopped_.load(std::memory_order_relaxed) && (!running_ || running_());
@@ -536,7 +541,7 @@ void GuideProducer::serial_query() {
                 serial_cv_.notify_one();
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(serial_query_interval_ms_));
     }
 }
 

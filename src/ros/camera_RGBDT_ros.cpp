@@ -13,7 +13,6 @@
 #include "device_path.h"
 #include "producer/guide_producer.h"
 #include "producer/realsense_producer.h"
-#include "sync_bridge/sync_bridge.h"
 #include "utils/ros_utils.h"
 #include "writer/guide_writer.h"
 #include "writer/realsense_writer.h"
@@ -25,10 +24,8 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 int if_save = 0;
 int rs_sync_mode = 0;
 int tempIncre_detect = 0;
-bool use_pwm_trigger_stamp = true;
 
 std::atomic<bool> quitFlag(false);
-std::atomic<std::int64_t> g_trigger_unix_ns(0);
 
 std::string outputdir;
 std::unique_ptr<GuideWriter> guide_writers[2];
@@ -43,22 +40,10 @@ ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
-std::shared_ptr<SyncBridge> g_sync_bridge;
 std::chrono::steady_clock::time_point g_output_start_at;
 
-std::int64_t current_trigger_unix_ns()
+Time make_frame_time(long sensor_sec, long sensor_microsec)
 {
-    if (!use_pwm_trigger_stamp) {
-        return 0;
-    }
-    return g_trigger_unix_ns.load(std::memory_order_relaxed);
-}
-
-Time make_frame_time(long sensor_sec, long sensor_microsec, std::int64_t trigger_unix_ns)
-{
-    if (trigger_unix_ns != 0) {
-        return make_time_ns(static_cast<uint64_t>(trigger_unix_ns));
-    }
     return make_time_sec_usec(sensor_sec, sensor_microsec);
 }
 
@@ -85,9 +70,6 @@ bool open_writers(const std::string& base_dir)
 void signal_handler(int)
 {
     quitFlag.store(true);
-    if (g_sync_bridge) {
-        g_sync_bridge->stop();
-    }
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -119,16 +101,6 @@ bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::cond
     });
 }
 
-void trigger_consumer()
-{
-    while (!quitFlag.load() && g_sync_bridge) {
-        const std::int64_t trigger_unix_ns = g_sync_bridge->take_trigger_unix_ns();
-        if (trigger_unix_ns != 0) {
-            g_trigger_unix_ns.store(trigger_unix_ns, std::memory_order_relaxed);
-        }
-    }
-}
-
 void stereo_consumer()
 {
     while (!quitFlag.load()) {
@@ -136,10 +108,6 @@ void stereo_consumer()
         GuideFrame right_frame;
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
-
-        const std::int64_t trigger_unix_ns = current_trigger_unix_ns();
-        left_frame.trigger_unix_ns = trigger_unix_ns;
-        right_frame.trigger_unix_ns = trigger_unix_ns;
 
         if (!output_enabled()) {
             continue;
@@ -152,12 +120,10 @@ void stereo_consumer()
 
         const auto left_stamp = make_frame_time(
             left_frame.sensor_sec,
-            left_frame.sensor_microsec,
-            trigger_unix_ns);
+            left_frame.sensor_microsec);
         const auto right_stamp = make_frame_time(
             right_frame.sensor_sec,
-            right_frame.sensor_microsec,
-            trigger_unix_ns);
+            right_frame.sensor_microsec);
         publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", left_stamp);
         publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", left_stamp);
         publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", right_stamp);
@@ -175,8 +141,6 @@ void realsense_consumer()
         StampedRealSenseFrame rs_frame;
         if (!rs_prod->pop_rgbd(rs_frame)) break;
 
-        rs_frame.trigger_unix_ns = current_trigger_unix_ns();
-
         if (!output_enabled()) {
             continue;
         }
@@ -187,8 +151,7 @@ void realsense_consumer()
 
         const auto rs_stamp = make_frame_time(
             rs_frame.sensor_sec,
-            rs_frame.sensor_microsec,
-            rs_frame.trigger_unix_ns);
+            rs_frame.sensor_microsec);
         publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", rs_stamp);
         publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
     }
@@ -243,9 +206,7 @@ int main(int argc, char **argv)
     if_save = get_param<int>("if_save", 0);
     tempIncre_detect = get_param<int>("temp_incre_detect", 0);
     outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
-    const bool use_pwm_sync = get_param<bool>("use_pwm_sync", false);
-    use_pwm_trigger_stamp = get_param<bool>("use_pwm_trigger_stamp", true);
-    const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
+    const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
@@ -261,27 +222,16 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, tempIncre_detect %d, outputdir %s, use_pwm_sync %d, use_pwm_trigger_stamp %d, pwm_line %s\n",
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, tempIncre_detect %d, outputdir %s, guide_query_ms %d\n",
            trigger_fps,
            rs_sync_mode,
            if_save,
            tempIncre_detect,
            outputdir.c_str(),
-           use_pwm_sync ? 1 : 0,
-           use_pwm_trigger_stamp ? 1 : 0,
-           pwm_line.c_str());
+           guide_query_ms);
 
     if (if_save && !open_writers(outputdir)) {
         return EXIT_FAILURE;
-    }
-
-    if (use_pwm_sync && !pwm_line.empty()) {
-        SyncBridge::Config config;
-        config.line_name = pwm_line;
-        g_sync_bridge = std::make_shared<SyncBridge>(config);
-        if (!g_sync_bridge->start()) {
-            return EXIT_FAILURE;
-        }
     }
 
     const char* dev_left = device_path::kLeftCamera;
@@ -299,6 +249,7 @@ int main(int argc, char **argv)
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(false);
+        guide->set_serial_query_interval_ms(guide_query_ms);
     }
 
     if (!GuideProducer::start_serial_pair(guides)) {
@@ -354,9 +305,6 @@ int main(int argc, char **argv)
         producers.emplace_back([i]() { guides[i]->run(); });
     }
 
-    if (g_sync_bridge) {
-        consumers.emplace_back(trigger_consumer);
-    }
     consumers.emplace_back(stereo_consumer);
 
     Rate rate(100.0);
@@ -377,9 +325,6 @@ int main(int argc, char **argv)
     for (auto& t : producers) t.join();
     for (auto& t : consumers) t.join();
 
-    if (g_sync_bridge) {
-        g_sync_bridge->stop();
-    }
     shutdown();
     return EXIT_SUCCESS;
 }
