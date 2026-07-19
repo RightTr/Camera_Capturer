@@ -1,6 +1,5 @@
 #include "sync_bridge/sync_bridge.h"
 
-#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -20,13 +19,11 @@ constexpr unsigned char kRxFrameHead0 = 0xFF;
 constexpr unsigned char kRxFrameHead1 = 0xFE;
 constexpr unsigned char kTxFrameHead0 = 0xEE;
 constexpr unsigned char kTxFrameHead1 = 0xFE;
-constexpr unsigned char kSetModeCmd = 0x01;
 constexpr unsigned char kSetMasterStreamCmd = 0x0C;
 constexpr unsigned char kMasterTriggerCmd = 0x86;
 constexpr unsigned char kMasterTriggerPayloadLen = 0x0C;
 constexpr unsigned char kFrameTail0 = 0xAA;
 constexpr unsigned char kFrameTail1 = 0xDD;
-constexpr unsigned char kHostTriggerMode = 0x04;
 constexpr int kControlReadTimeoutMs = 150;
 constexpr int kControlMaxFrameLen = 64;
 
@@ -122,8 +119,7 @@ bool SyncBridge::start()
         running_.store(false);
         return false;
     }
-    if (!send_control_request(kSetModeCmd, {kHostTriggerMode}, kSetModeCmd) ||
-        !set_master_stream(true)) {
+    if (!set_master_stream(true)) {
         close_serial();
         running_.store(false);
         return false;
@@ -347,6 +343,33 @@ bool SyncBridge::send_control_request(unsigned char cmd,
     return false;
 }
 
+void SyncBridge::handle_serial_frame(unsigned char cmd,
+                                     const std::vector<unsigned char>& payload)
+{
+    if (cmd != kMasterTriggerCmd) {
+        static unsigned int ignored_frame_logs = 0;
+        if (ignored_frame_logs < 5) {
+            std::printf("Time serial frame ignored: cmd=0x%02X, len=%zu\n",
+                        cmd,
+                        payload.size());
+            ++ignored_frame_logs;
+        }
+        return;
+    }
+    if (payload.size() != kMasterTriggerPayloadLen) {
+        return;
+    }
+
+    const std::uint32_t trigger_count = read_u32_le(payload.data());
+    const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
+    const auto stamp_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
+    serial_frames_received_.fetch_add(1, std::memory_order_relaxed);
+    std::printf("Serial trigger time received: count=%u, unix_ns=%lld\n",
+                trigger_count,
+                static_cast<long long>(stamp_ns));
+    push_serial_stamp(stamp_ns);
+}
+
 bool SyncBridge::setup_gpio()
 {
     gpio_line_ = gpiod_line_find(config_.pwm_line.c_str());
@@ -437,8 +460,12 @@ void SyncBridge::serial_loop()
     };
 
     ParseState state = ParseState::HEAD0;
-    std::array<unsigned char, kMasterTriggerPayloadLen> payload {};
+    std::vector<unsigned char> payload;
+    payload.reserve(kControlMaxFrameLen);
     std::size_t payload_index = 0;
+    unsigned char cmd = 0;
+    unsigned char length = 0;
+    unsigned char received_checksum = 0;
 
     while (running_.load(std::memory_order_relaxed)) {
         unsigned char byte = 0;
@@ -467,24 +494,29 @@ void SyncBridge::serial_loop()
             }
             break;
         case ParseState::CMD:
-            state = byte == kMasterTriggerCmd ? ParseState::LEN : ParseState::HEAD0;
+            cmd = byte;
+            state = ParseState::LEN;
             break;
         case ParseState::LEN:
-            if (byte == kMasterTriggerPayloadLen) {
-                payload_index = 0;
-                state = ParseState::PAYLOAD;
-            } else {
+            length = byte;
+            if (length > kControlMaxFrameLen) {
                 state = ParseState::HEAD0;
+                break;
             }
+            payload.clear();
+            payload_index = 0;
+            state = length == 0 ? ParseState::CHECKSUM : ParseState::PAYLOAD;
             break;
         case ParseState::PAYLOAD:
-            payload[payload_index++] = byte;
-            if (payload_index == payload.size()) {
+            payload.push_back(byte);
+            ++payload_index;
+            if (payload_index == length) {
                 state = ParseState::CHECKSUM;
             }
             break;
         case ParseState::CHECKSUM:
-            if (byte != checksum(kMasterTriggerCmd, kMasterTriggerPayloadLen, payload.data())) {
+            received_checksum = byte;
+            if (received_checksum != checksum(cmd, length, payload.data())) {
                 state = ParseState::HEAD0;
                 break;
             }
@@ -495,14 +527,7 @@ void SyncBridge::serial_loop()
             break;
         case ParseState::TAIL1:
             if (byte == kFrameTail1) {
-                const std::uint32_t trigger_count = read_u32_le(payload.data());
-                const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
-                const auto stamp_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
-                serial_frames_received_.fetch_add(1, std::memory_order_relaxed);
-                std::printf("Serial trigger time received: count=%u, unix_ns=%lld\n",
-                            trigger_count,
-                            static_cast<long long>(stamp_ns));
-                push_serial_stamp(stamp_ns);
+                handle_serial_frame(cmd, payload);
             }
             state = ParseState::HEAD0;
             break;

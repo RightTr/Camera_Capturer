@@ -41,6 +41,8 @@ private:
     bool send_control_request(unsigned char cmd,
                               const std::vector<unsigned char>& payload,
                               unsigned char expected_cmd);
+    void handle_serial_frame(unsigned char cmd,
+                             const std::vector<unsigned char>& payload);
     bool setup_gpio();
     void cleanup_gpio();
     void push_serial_stamp(std::int64_t stamp_ns);
