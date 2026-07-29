@@ -196,25 +196,28 @@ ros2 topic pub --once /guidecam/sync std_msgs/Int32 "{data: '0'}" # Sync off
 * Guide Stereo Launch
 
 ```bash
-cd cap_ws
-source install/setup.bash
 ros2 launch camera_capturer guidestereo.launch.py
+
+ros2 launch camera_capturer guidestereo_trigger.launch.py 
 ```
+
+Use this launch file (*guidestereo_trigger.launch.py*) when Guide stereo is driven by the external PWM trigger board. The board timestamp serial port provides the PWM output time, and the GPIO line captures the PWM generation time on MCU.
 
 * RGBDT Launch
 
 ```bash
-cd cap_ws
-source install/setup.bash
 ros2 launch camera_capturer camera_rgbdt.launch.py
+
+ros2 launch camera_capturer rgbdt_trigger.launch.py 
 ```
+
+Use this launch file (*rgbdt_trigger.launch.py*) when Guide stereo and RealSense RGBD are driven by the external PWM trigger board. The board timestamp serial port provides the PWM output time, and the GPIO line captures the PWM generation time on MCU.
+
+The first 10 seconds after startup are treated as a warm-up period. Frames are captured, but ROS image publishing and file saving start only after the warm-up period ends.
+
 
 * RealSense Launch
 
 ```bash
-cd cap_ws
-source install/setup.bash
 ros2 launch camera_capturer realsense.launch.py
 ```
-
-* The first 10 seconds after startup are treated as a warm-up period. Frames are captured, but ROS image publishing and file saving start only after the warm-up period ends.
