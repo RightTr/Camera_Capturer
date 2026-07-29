@@ -66,10 +66,9 @@ void imu_consumer()
 {
     while (!quitFlag.load()) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu(frame)) break;
-
-        if (if_save) {
-            rs_writer->write_imu(frame);
+        if (!rs_prod->pop_imu(frame)) {
+            std::cerr << "[realsense] IMU consumer stopped" << std::endl;
+            break;
         }
 
         if (frame.stream_type == RS2_STREAM_ACCEL) {
@@ -88,6 +87,10 @@ void imu_consumer()
                 frame.x,
                 frame.y,
                 frame.z);
+        }
+
+        if (if_save) {
+            rs_writer->write_imu(frame);
         }
     }
 }

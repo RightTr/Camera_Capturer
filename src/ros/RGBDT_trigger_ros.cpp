@@ -473,13 +473,14 @@ void imu_consumer()
 {
     for (;;) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu(frame)) break;
+        if (!rs_prod->pop_imu(frame)) {
+            std::cerr << "[realsense] IMU consumer stopped" << std::endl;
+            break;
+        }
 
         if (!output_enabled()) {
             continue;
         }
-
-        if (if_save) rs_writer->write_imu(frame);
 
         if (frame.stream_type == RS2_STREAM_ACCEL) {
             publish_accel_measurement(
@@ -498,6 +499,8 @@ void imu_consumer()
                 frame.y,
                 frame.z);
         }
+
+        if (if_save) rs_writer->write_imu(frame);
     }
 }
 
