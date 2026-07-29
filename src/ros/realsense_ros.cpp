@@ -109,10 +109,11 @@ int main(int argc, char **argv)
     const int rgbd_queue_size = get_param<int>("rgbd_queue_size", 30);
     const int imu_queue_size = get_param<int>("imu_queue_size", 400);
     if_save = get_param<int>("if_save", 0);
+    const int if_save_img = get_param<int>("if_save_img", 1);
     const std::string outputdir = get_param<std::string>("output_dir", "/home/pi/Cap_ws");
 
     if (if_save) {
-        rs_writer = std::make_unique<RealSenseWriter>(outputdir);
+        rs_writer = std::make_unique<RealSenseWriter>(outputdir, if_save_img != 0);
         if (!rs_writer->open()) {
             return EXIT_FAILURE;
         }

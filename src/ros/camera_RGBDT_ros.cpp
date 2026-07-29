@@ -128,12 +128,13 @@ void write_times(bool flush = false)
     }
 }
 
-bool open_writers(const std::string& base_dir)
+bool open_writers(const std::string& base_dir, bool save_images)
 {
     for (int i = 0; i < 2; ++i) {
         guide_writers[i] = std::make_unique<GuideWriter>(
             base_dir,
-            GuideProducer::camera_name(i));
+            GuideProducer::camera_name(i),
+            save_images);
         if (!guide_writers[i]->open()) {
             return false;
         }
@@ -145,7 +146,7 @@ bool open_writers(const std::string& base_dir)
     }
     time_stream << "left_host_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
 
-    rs_writer = std::make_unique<RealSenseWriter>(base_dir);
+    rs_writer = std::make_unique<RealSenseWriter>(base_dir, save_images);
     if (!rs_writer->open()) {
         return false;
     }
@@ -327,6 +328,7 @@ int main(int argc, char **argv)
     ros_init(argc, argv, "camera_rgbdt_node");
     rs_sync_mode = get_param<int>("rs_sync_mode", 3);
     if_save = get_param<int>("if_save", 0);
+    const int if_save_img = get_param<int>("if_save_img", 1);
     outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
@@ -344,14 +346,15 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, outputdir %s, guide_query_ms %d\n",
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d\n",
            trigger_fps,
            rs_sync_mode,
            if_save,
+           if_save_img,
            outputdir.c_str(),
            guide_query_ms);
 
-    if (if_save && !open_writers(outputdir)) {
+    if (if_save && !open_writers(outputdir, if_save_img != 0)) {
         return EXIT_FAILURE;
     }
 

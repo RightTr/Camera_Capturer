@@ -22,12 +22,13 @@ std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<GuideWriter> guide_writers[2];
 std::ofstream time_stream;
 
-bool open_writers(const std::string& base_dir)
+bool open_writers(const std::string& base_dir, bool save_images)
 {
     for (int i = 0; i < 2; ++i) {
         guide_writers[i] = std::make_unique<GuideWriter>(
             base_dir,
-            GuideProducer::camera_name(i));
+            GuideProducer::camera_name(i),
+            save_images);
         if (!guide_writers[i]->open()) {
             return false;
         }
@@ -99,6 +100,7 @@ int main(int argc, char **argv) {
     const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
     const int if_save = get_param<int>("if_save", 0);
+    const int if_save_img = get_param<int>("if_save_img", 1);
     const std::string outputdir = get_param<std::string>("output_dir", "./capture");
 
     const auto left_image_pub = advertise<ImageMsg>("guide_left/image", 30);
@@ -129,7 +131,7 @@ int main(int argc, char **argv) {
         guide->set_serial_query_time(guide_query_ms);
     }
 
-    if (if_save && !open_writers(outputdir)) {
+    if (if_save && !open_writers(outputdir, if_save_img != 0)) {
         return EXIT_FAILURE;
     }
 

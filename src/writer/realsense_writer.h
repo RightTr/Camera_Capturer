@@ -7,7 +7,7 @@
 
 class RealSenseWriter {
 public:
-    explicit RealSenseWriter(std::string output_dir);
+    explicit RealSenseWriter(std::string output_dir, bool save_images = true);
     ~RealSenseWriter();
 
     bool open();
@@ -19,6 +19,7 @@ public:
 
 private:
     std::string output_dir_;
+    bool save_images_;
     std::ofstream time_stream_;
     std::ofstream accel_stream_;
     std::ofstream gyro_stream_;

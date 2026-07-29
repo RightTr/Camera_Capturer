@@ -7,7 +7,7 @@
 
 class GuideWriter {
 public:
-    GuideWriter(std::string output_dir, std::string camera_name);
+    GuideWriter(std::string output_dir, std::string camera_name, bool save_images = true);
     ~GuideWriter();
 
     bool open();
@@ -20,6 +20,7 @@ private:
 
     std::string output_dir_;
     std::string camera_name_;
+    bool save_images_;
     std::ofstream time_stream_;
     std::ofstream param_stream_;
     std::ofstream focal_temp_stream_;

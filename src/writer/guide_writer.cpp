@@ -8,9 +8,10 @@
 
 #include "utils/common_utils.h"
 
-GuideWriter::GuideWriter(std::string output_dir, std::string camera_name)
+GuideWriter::GuideWriter(std::string output_dir, std::string camera_name, bool save_images)
     : output_dir_(std::move(output_dir)),
-      camera_name_(std::move(camera_name))
+      camera_name_(std::move(camera_name)),
+      save_images_(save_images)
 {
 }
 
@@ -24,8 +25,11 @@ bool GuideWriter::open()
     const std::string camera_dir = output_dir_ + "/" + camera_name_;
 
     try {
-        std::filesystem::create_directories(camera_dir + "/image");
-        std::filesystem::create_directories(camera_dir + "/temperature");
+        std::filesystem::create_directories(camera_dir);
+        if (save_images_) {
+            std::filesystem::create_directories(camera_dir + "/image");
+            std::filesystem::create_directories(camera_dir + "/temperature");
+        }
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Failed to create guide output dirs: " << e.what() << std::endl;
         return false;
@@ -81,16 +85,18 @@ void GuideWriter::write(const GuideFrame& frame)
                   << "," << frame.param_data.region_avg_temp
                   << std::endl;
 
-    std::ostringstream ss;
-    ss << output_dir_ << "/" << camera_name_ << "/image/"
-       << format_timestamp_ns(stamp_ns) << ".png";
-    cv::imwrite(ss.str(), frame.gray_image);
+    if (save_images_) {
+        std::ostringstream ss;
+        ss << output_dir_ << "/" << camera_name_ << "/image/"
+           << format_timestamp_ns(stamp_ns) << ".png";
+        cv::imwrite(ss.str(), frame.gray_image);
 
-    ss.str("");
-    ss.clear();
-    ss << output_dir_ << "/" << camera_name_ << "/temperature/"
-       << format_timestamp_ns(stamp_ns) << ".png";
-    save_temperature_png(frame.temperature_celsius, ss.str());
+        ss.str("");
+        ss.clear();
+        ss << output_dir_ << "/" << camera_name_ << "/temperature/"
+           << format_timestamp_ns(stamp_ns) << ".png";
+        save_temperature_png(frame.temperature_celsius, ss.str());
+    }
 }
 
 std::ofstream* GuideWriter::temp_stream()

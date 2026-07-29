@@ -18,6 +18,7 @@ def generate_launch_description():
     rgbd_queue_size = LaunchConfiguration("rgbd_queue_size")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
     if_save = LaunchConfiguration("if_save")
+    if_save_img = LaunchConfiguration("if_save_img")
     output_dir = LaunchConfiguration("output_dir")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
@@ -71,6 +72,11 @@ def generate_launch_description():
             description="Save RealSense RGBD and IMU data when nonzero.",
         ),
         DeclareLaunchArgument(
+            "if_save_img",
+            default_value="1",
+            description="Save RealSense RGBD image PNG files when if_save is enabled.",
+        ),
+        DeclareLaunchArgument(
             "output_dir",
             default_value="./capture",
             description="Directory used when if_save is enabled.",
@@ -95,6 +101,7 @@ def generate_launch_description():
                 "rgbd_queue_size": ParameterValue(rgbd_queue_size, value_type=int),
                 "imu_queue_size": ParameterValue(imu_queue_size, value_type=int),
                 "if_save": ParameterValue(if_save, value_type=int),
+                "if_save_img": ParameterValue(if_save_img, value_type=int),
                 "output_dir": output_dir,
             }],
         ),

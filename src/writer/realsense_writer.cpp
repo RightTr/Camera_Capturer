@@ -8,8 +8,9 @@
 
 #include "utils/common_utils.h"
 
-RealSenseWriter::RealSenseWriter(std::string output_dir)
-    : output_dir_(std::move(output_dir))
+RealSenseWriter::RealSenseWriter(std::string output_dir, bool save_images)
+    : output_dir_(std::move(output_dir)),
+      save_images_(save_images)
 {
 }
 
@@ -21,8 +22,11 @@ RealSenseWriter::~RealSenseWriter()
 bool RealSenseWriter::open()
 {
     try {
-        std::filesystem::create_directories(output_dir_ + "/realsense/rgb");
-        std::filesystem::create_directories(output_dir_ + "/realsense/depth_raw");
+        std::filesystem::create_directories(output_dir_ + "/realsense");
+        if (save_images_) {
+            std::filesystem::create_directories(output_dir_ + "/realsense/rgb");
+            std::filesystem::create_directories(output_dir_ + "/realsense/depth_raw");
+        }
         std::filesystem::create_directories(output_dir_ + "/realsense/imu");
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Failed to create realsense output dirs: " << e.what() << std::endl;
@@ -79,14 +83,16 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
                  << depth_sensor_time << ","
                  << depth_host_time << std::endl;
 
-    std::ostringstream ss;
-    ss << output_dir_ << "/realsense/rgb/" << color_stamp_time << ".png";
-    cv::imwrite(ss.str(), frame.color_image);
+    if (save_images_) {
+        std::ostringstream ss;
+        ss << output_dir_ << "/realsense/rgb/" << color_stamp_time << ".png";
+        cv::imwrite(ss.str(), frame.color_image);
 
-    ss.str("");
-    ss.clear();
-    ss << output_dir_ << "/realsense/depth_raw/" << depth_stamp_time << ".png";
-    cv::imwrite(ss.str(), frame.depth_image_raw);
+        ss.str("");
+        ss.clear();
+        ss << output_dir_ << "/realsense/depth_raw/" << depth_stamp_time << ".png";
+        cv::imwrite(ss.str(), frame.depth_image_raw);
+    }
 }
 
 void RealSenseWriter::write_imu(const StampedImuFrame& frame)

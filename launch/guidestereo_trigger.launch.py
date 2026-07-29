@@ -15,6 +15,7 @@ def generate_launch_description():
     pwm_line = LaunchConfiguration("pwm_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     if_save = LaunchConfiguration("if_save")
+    if_save_img = LaunchConfiguration("if_save_img")
     output_dir = LaunchConfiguration("output_dir")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "stereo.rviz"]
@@ -57,6 +58,11 @@ def generate_launch_description():
             description="Save synchronized guide images and stereo timestamp CSV when nonzero.",
         ),
         DeclareLaunchArgument(
+            "if_save_img",
+            default_value="1",
+            description="Save guide image PNG files when if_save is enabled.",
+        ),
+        DeclareLaunchArgument(
             "output_dir",
             default_value="./capture",
             description="Directory used when if_save is enabled.",
@@ -73,6 +79,7 @@ def generate_launch_description():
                 "pwm_line": pwm_line,
                 "sync_queue_size": sync_queue_size,
                 "if_save": if_save,
+                "if_save_img": if_save_img,
                 "output_dir": output_dir,
             }],
         ),

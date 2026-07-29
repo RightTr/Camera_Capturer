@@ -10,6 +10,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     rs_sync_mode = LaunchConfiguration("rs_sync_mode")
     if_save = LaunchConfiguration("if_save")
+    if_save_img = LaunchConfiguration("if_save_img")
     output_dir = LaunchConfiguration("output_dir")
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     serial_port = LaunchConfiguration("serial_port")
@@ -31,6 +32,11 @@ def generate_launch_description():
             "if_save",
             default_value="1",
             description="Save captured data to disk when non-zero.",
+        ),
+        DeclareLaunchArgument(
+            "if_save_img",
+            default_value="1",
+            description="Save left/right/RGBD image PNG files when if_save is enabled.",
         ),
         DeclareLaunchArgument(
             "output_dir",
@@ -75,6 +81,7 @@ def generate_launch_description():
             parameters=[{
                 "rs_sync_mode": rs_sync_mode,
                 "if_save": if_save,
+                "if_save_img": if_save_img,
                 "output_dir": output_dir,
                 "guide_query_ms": guide_query_ms,
                 "serial_port": serial_port,
