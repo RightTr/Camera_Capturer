@@ -1,16 +1,16 @@
-# Camera Capturer
+# RGBDT Camera Capturer
 
 Camera capturer implementation using v4l2.
 
-* Guide Thermal Infrared Camera (Support external trigger synchronization)
+* Guide Thermal Infrared camera (Support external trigger synchronization)
 
-Guide Official SDK: Please refer to *./Linux_USB3.0_V2_0_0-x86_64-linux-gnu-gcc-9_4_0_20251201*
+Guide official SDK and documents: Please refer to *./Linux_USB3.0_V2_0_0-x86_64-linux-gnu-gcc-9_4_0_20251201*
 
-* Realsense D455f RGBD Camera (Support external trigger synchronization)
+* Realsense D455f RGBD camera (Support external trigger synchronization)
 
 ## 1. Prerequisites
 
-### 1.1 Bind Video Devices to Fixed USB Ports
+### 1.1 Bind video devices to fixed USB ports
 
 Bind the video devices of two camera heads to fixed physical USB ports.
 
@@ -42,7 +42,7 @@ ffplay -f v4l2   -pixel_format yuyv422   -video_size 1280x513   -framerate 30   
 ffplay -f v4l2   -pixel_format yuyv422   -video_size 1280x513   -framerate 30   /dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0
 ```
 
-### 1.2 Bind Serial Devices to Fixed USB Ports
+### 1.2 Bind serial devices to fixed USB ports
 
 Bind the serial devices of two camera heads to fixed physical USB ports.
 
@@ -81,7 +81,7 @@ sudo udevadm trigger
 
 Now, /dev/guide_left and /dev/guide_right refer to fixed USB ports.
 
-### 1.3 Check RealSense Serial Number
+### 1.3 Check realSense serial number
 
 ```bash
 rs-enumerate-devices
@@ -97,7 +97,7 @@ Please modify the variable *dev_rs* to the number above in the source code.
 
 ## 2. Build
 
-### 2.1 Direct Build
+### 2.1 Direct build
 
 ```bash
 git clone https://github.com/RightTr/Camera_Capturer.git
@@ -128,7 +128,7 @@ cd Camera_Capturer
 
 ## 3. Usage
 
-### 3.1 Direct Run
+### 3.1 Direct run
 
 * Guide Mono
 
@@ -167,7 +167,7 @@ tempIncre_detect (default: false), same as the description above. Especially, wh
 
 ### 3.2 Run with ROS
 
-* Guide Stereo Node
+* Guide Stereo node
 
 ```bash
 cd cap_ws
@@ -193,7 +193,7 @@ ros2 topic pub --once /guidecam/sync std_msgs/Int32 "{data: '1'}" # Sync on
 ros2 topic pub --once /guidecam/sync std_msgs/Int32 "{data: '0'}" # Sync off
 ```
 
-* Guide Stereo Launch
+* Guide Stereo launch
 
 ```bash
 ros2 launch camera_capturer guidestereo.launch.py
@@ -203,7 +203,7 @@ ros2 launch camera_capturer guidestereo_trigger.launch.py
 
 Use this launch file (*guidestereo_trigger.launch.py*) when Guide stereo is driven by the external PWM trigger board. The board timestamp serial port provides the PWM output time, and the GPIO line captures the PWM generation time on MCU.
 
-* RGBDT Launch
+* RGBDT launch
 
 ```bash
 ros2 launch camera_capturer camera_rgbdt.launch.py
@@ -215,8 +215,7 @@ Use this launch file (*rgbdt_trigger.launch.py*) when Guide stereo and RealSense
 
 The first 10 seconds after startup are treated as a warm-up period. Frames are captured, but ROS image publishing and file saving start only after the warm-up period ends.
 
-
-* RealSense Launch
+* RealSense launch
 
 ```bash
 ros2 launch camera_capturer realsense.launch.py
