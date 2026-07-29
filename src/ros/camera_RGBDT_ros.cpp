@@ -360,7 +360,6 @@ int main(int argc, char **argv)
 
     if (!GuideProducer::create_stereo_pair(
             guides,
-            trigger_fps,
             dev_left,
             dev_right,
             [] { return !quitFlag.load(); },

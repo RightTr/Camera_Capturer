@@ -94,13 +94,11 @@ public:
     static const char* camera_name(int cam_id);
     static std::unique_ptr<GuideProducer> create_from_device(
         int cam_id,
-        int fps,
         const char* device_name,
         std::function<bool()> running,
         std::function<void()> fail = {});
     static bool create_stereo_pair(
         std::unique_ptr<GuideProducer> (&guides)[2],
-        int fps,
         const char* left_device,
         const char* right_device,
         std::function<bool()> running,
@@ -113,7 +111,6 @@ public:
 
     GuideProducer(
         int cam_id,
-        int fps,
         int fd,
         GuideBuffer* buffers,
         std::function<bool()> running,
@@ -145,7 +142,6 @@ private:
     void serial_query();
 
     int cam_id_;
-    int fps_;
     int fd_;
     GuideBuffer* buffers_;
     unsigned int buffer_count_ = 4;

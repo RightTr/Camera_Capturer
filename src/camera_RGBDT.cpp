@@ -131,7 +131,6 @@ int main(int argc, char **argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    int trigger_fps = 30;
     int guide_query_ms = 100;
     outputdir = "/data/home/pi/Cap";
 
@@ -161,8 +160,7 @@ int main(int argc, char **argv) {
         outputdir = argv[4];
         guide_query_ms = atoi(argv[5]);
     }
-    printf("trigger_fps %d, outputdir %s, guide_query_ms %d\n",
-           trigger_fps,
+    printf("outputdir %s, guide_query_ms %d\n",
            outputdir.c_str(),
            guide_query_ms);
 
@@ -174,7 +172,6 @@ int main(int argc, char **argv) {
 
     if (!GuideProducer::create_stereo_pair(
             guides,
-            trigger_fps,
             dev_left,
             dev_right,
             [] { return !quitFlag.load(); },

@@ -22,6 +22,7 @@ namespace {
 constexpr int kWidth = 640;
 constexpr int kHeight = 512;
 constexpr int kParamOffset = 512 * 1280 * 2;
+constexpr int kGuideFps = 30;
 
 uint16_t be16(const char* p)
 {
@@ -136,7 +137,6 @@ const char* GuideProducer::camera_name(int cam_id)
 
 std::unique_ptr<GuideProducer> GuideProducer::create_from_device(
     int cam_id,
-    int fps,
     const char* device_name,
     std::function<bool()> running,
     std::function<void()> fail)
@@ -149,7 +149,6 @@ std::unique_ptr<GuideProducer> GuideProducer::create_from_device(
 
     return std::make_unique<GuideProducer>(
         cam_id,
-        fps,
         fd,
         buffers,
         std::move(running),
@@ -158,7 +157,6 @@ std::unique_ptr<GuideProducer> GuideProducer::create_from_device(
 
 bool GuideProducer::create_stereo_pair(
     std::unique_ptr<GuideProducer> (&guides)[2],
-    int fps,
     const char* left_device,
     const char* right_device,
     std::function<bool()> running,
@@ -166,13 +164,11 @@ bool GuideProducer::create_stereo_pair(
 {
     auto left = create_from_device(
         0,
-        fps,
         left_device,
         running,
         fail);
     auto right = create_from_device(
         1,
-        fps,
         right_device,
         running,
         fail);
@@ -204,13 +200,11 @@ bool GuideProducer::start_capture_pair(std::unique_ptr<GuideProducer> (&guides)[
 
 GuideProducer::GuideProducer(
     int cam_id,
-    int fps,
     int fd,
     GuideBuffer* buffers,
     std::function<bool()> running,
     std::function<void()> fail)
     : cam_id_(cam_id),
-      fps_(fps),
       fd_(fd),
       buffers_(buffers),
       running_(std::move(running)),
@@ -284,13 +278,8 @@ bool GuideProducer::pop(GuideFrame& frame)
 
 void GuideProducer::run()
 {
-    if (fps_ <= 0) {
-        std::cerr << "Invalid guide fps: " << fps_ << std::endl;
-        return;
-    }
-
     const std::string name = camera_name(cam_id_);
-    const auto min_dt = std::chrono::microseconds(900000 / fps_);
+    const auto min_dt = std::chrono::microseconds(900000 / kGuideFps);
     struct pollfd pfd{fd_, POLLIN, 0};
     auto last = std::chrono::system_clock::now();
 

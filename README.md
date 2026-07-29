@@ -133,7 +133,7 @@ cd Camera_Capturer
 * Guide Mono
 
 ```bash
-./build/guidemono <camera_id> <max_fps> (<if_save>) (<output_dir>) (<serial_port_id>) (<guide_query_ms>)
+./build/guidemono <camera_id> (<if_save>) (<output_dir>) (<serial_port_id>) (<guide_query_ms>)
 ```
 
 * Guide Stereo

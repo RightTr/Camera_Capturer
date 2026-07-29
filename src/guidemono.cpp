@@ -37,37 +37,32 @@ int main(int argc, char** argv)
     std::signal(SIGTERM, signal_handler);
 
     int video_id = 2;
-    int maxfps = 25;
     int portid = 0;
     int if_save = 0;
     int guide_query_ms = 100;
     std::string outputdir = "./";
 
-    if (argc == 3) {
+    if (argc == 2) {
         video_id = std::atoi(argv[1]);
-        maxfps = std::atoi(argv[2]);
+    } else if (argc == 4) {
+        video_id = std::atoi(argv[1]);
+        if_save = std::atoi(argv[2]);
+        outputdir = argv[3];
     } else if (argc == 5) {
         video_id = std::atoi(argv[1]);
-        maxfps = std::atoi(argv[2]);
-        if_save = std::atoi(argv[3]);
-        outputdir = argv[4];
+        if_save = std::atoi(argv[2]);
+        outputdir = argv[3];
+        portid = std::atoi(argv[4]);
     } else if (argc == 6) {
         video_id = std::atoi(argv[1]);
-        maxfps = std::atoi(argv[2]);
-        if_save = std::atoi(argv[3]);
-        outputdir = argv[4];
-        portid = std::atoi(argv[5]);
-    } else if (argc == 7) {
-        video_id = std::atoi(argv[1]);
-        maxfps = std::atoi(argv[2]);
-        if_save = std::atoi(argv[3]);
-        outputdir = argv[4];
-        portid = std::atoi(argv[5]);
-        guide_query_ms = std::atoi(argv[6]);
+        if_save = std::atoi(argv[2]);
+        outputdir = argv[3];
+        portid = std::atoi(argv[4]);
+        guide_query_ms = std::atoi(argv[5]);
     } else {
         std::cerr << "Usage: " << argv[0]
-                  << " <camera_id> <max_fps> (<if_save>) (<output_dir>) (<serial_port_id>) (<guide_query_ms>)" << std::endl;
-        std::cout << "e.g., " << argv[0] << " 2 25 1 ./output 0 100" << std::endl;
+                  << " <camera_id> (<if_save>) (<output_dir>) (<serial_port_id>) (<guide_query_ms>)" << std::endl;
+        std::cout << "e.g., " << argv[0] << " 2 1 ./output 0 100" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -89,7 +84,6 @@ int main(int argc, char** argv)
     const std::string device_name = "/dev/video" + std::to_string(video_id);
     auto producer = GuideProducer::create_from_device(
         portid,
-        maxfps,
         device_name.c_str(),
         [] { return !quitFlag.load(); });
     if (!producer) {
