@@ -4,6 +4,8 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
+#include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -13,6 +15,7 @@
 #include "device_path.h"
 #include "producer/guide_producer.h"
 #include "producer/realsense_producer.h"
+#include "utils/common_utils.h"
 #include "utils/ros_utils.h"
 #include "writer/guide_writer.h"
 #include "writer/realsense_writer.h"
@@ -23,13 +26,33 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 int if_save = 0;
 int rs_sync_mode = 0;
-int tempIncre_detect = 0;
 
 std::atomic<bool> quitFlag(false);
 
 std::string outputdir;
 std::unique_ptr<GuideWriter> guide_writers[2];
 std::unique_ptr<RealSenseWriter> rs_writer;
+std::ofstream time_stream;
+
+struct GuideTimes {
+    std::int64_t index;
+    std::string left_host_time;
+    std::string right_host_time;
+};
+
+struct RealSenseTimes {
+    std::int64_t index;
+    std::string color_sensor_time;
+    std::string color_host_time;
+    std::string depth_sensor_time;
+    std::string depth_host_time;
+};
+
+std::mutex time_mutex;
+std::deque<GuideTimes> guide_time_queue;
+std::deque<RealSenseTimes> rs_time_queue;
+std::int64_t guide_base_host_ns = 0;
+std::int64_t rs_base_host_ns = 0;
 
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
@@ -42,14 +65,67 @@ ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::chrono::steady_clock::time_point g_output_start_at;
 
-Time make_frame_time(long sensor_sec, long sensor_microsec)
-{
-    return make_time_sec_usec(sensor_sec, sensor_microsec);
-}
-
 bool output_enabled()
 {
     return std::chrono::steady_clock::now() >= g_output_start_at;
+}
+
+std::int64_t frame_index(std::int64_t host_ns, std::int64_t& base_host_ns)
+{
+    constexpr std::int64_t frame_ns = 33333333LL;
+    if (base_host_ns == 0) {
+        base_host_ns = host_ns;
+    }
+    return (host_ns - base_host_ns + frame_ns / 2) / frame_ns;
+}
+
+void write_times(bool flush = false)
+{
+    while (!guide_time_queue.empty() || !rs_time_queue.empty()) {
+        if (guide_time_queue.empty()) {
+            if (!flush && rs_time_queue.size() < 2) return;
+            const RealSenseTimes rs_times = rs_time_queue.front();
+            rs_time_queue.pop_front();
+            time_stream << ",,"
+                        << rs_times.color_sensor_time << ","
+                        << rs_times.color_host_time << ","
+                        << rs_times.depth_sensor_time << ","
+                        << rs_times.depth_host_time << "\n";
+            continue;
+        }
+        if (rs_time_queue.empty()) {
+            if (!flush && guide_time_queue.size() < 2) return;
+            const GuideTimes guide_times = guide_time_queue.front();
+            guide_time_queue.pop_front();
+            time_stream << guide_times.left_host_time << ","
+                        << guide_times.right_host_time << ",,,,\n";
+            continue;
+        }
+
+        const GuideTimes guide_times = guide_time_queue.front();
+        const RealSenseTimes rs_times = rs_time_queue.front();
+        if (guide_times.index == rs_times.index) {
+            guide_time_queue.pop_front();
+            rs_time_queue.pop_front();
+            time_stream << guide_times.left_host_time << ","
+                        << guide_times.right_host_time << ","
+                        << rs_times.color_sensor_time << ","
+                        << rs_times.color_host_time << ","
+                        << rs_times.depth_sensor_time << ","
+                        << rs_times.depth_host_time << "\n";
+        } else if (guide_times.index < rs_times.index) {
+            guide_time_queue.pop_front();
+            time_stream << guide_times.left_host_time << ","
+                        << guide_times.right_host_time << ",,,,\n";
+        } else {
+            rs_time_queue.pop_front();
+            time_stream << ",,"
+                        << rs_times.color_sensor_time << ","
+                        << rs_times.color_host_time << ","
+                        << rs_times.depth_sensor_time << ","
+                        << rs_times.depth_host_time << "\n";
+        }
+    }
 }
 
 bool open_writers(const std::string& base_dir)
@@ -63,8 +139,17 @@ bool open_writers(const std::string& base_dir)
         }
     }
 
+    time_stream.open(base_dir + "/times.csv");
+    if (!time_stream.is_open()) {
+        return false;
+    }
+    time_stream << "left_host_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
+
     rs_writer = std::make_unique<RealSenseWriter>(base_dir);
-    return rs_writer->open();
+    if (!rs_writer->open()) {
+        return false;
+    }
+    return true;
 }
 
 void signal_handler(int)
@@ -114,14 +199,26 @@ void stereo_consumer()
         }
 
         if (if_save) {
+            {
+                std::lock_guard<std::mutex> lock(time_mutex);
+                const std::int64_t left_host_ns = to_ns_from_sec_nsec(
+                    left_frame.host_sec,
+                    left_frame.host_nanosec);
+                guide_time_queue.push_back({
+                    frame_index(left_host_ns, guide_base_host_ns),
+                    format_timestamp_sec_nsec(left_frame.host_sec, left_frame.host_nanosec),
+                    format_timestamp_sec_nsec(right_frame.host_sec, right_frame.host_nanosec),
+                });
+                write_times();
+            }
             guide_writers[0]->write(left_frame);
             guide_writers[1]->write(right_frame);
         }
 
-        const auto left_stamp = make_frame_time(
+        const auto left_stamp = make_time_sec_usec(
             left_frame.sensor_sec,
             left_frame.sensor_microsec);
-        const auto right_stamp = make_frame_time(
+        const auto right_stamp = make_time_sec_usec(
             right_frame.sensor_sec,
             right_frame.sensor_microsec);
         publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", left_stamp);
@@ -146,14 +243,39 @@ void realsense_consumer()
         }
 
         if (if_save) {
+            {
+                std::lock_guard<std::mutex> lock(time_mutex);
+                const std::int64_t color_host_ns = to_ns_from_sec_nsec(
+                    rs_frame.color_host_sec,
+                    rs_frame.color_host_nanosec);
+                rs_time_queue.push_back({
+                    frame_index(color_host_ns, rs_base_host_ns),
+                    format_timestamp_sec_usec_as_nsec(
+                        rs_frame.color_sensor_sec,
+                        rs_frame.color_sensor_microsec),
+                    format_timestamp_sec_nsec(
+                        rs_frame.color_host_sec,
+                        rs_frame.color_host_nanosec),
+                    format_timestamp_sec_usec_as_nsec(
+                        rs_frame.depth_sensor_sec,
+                        rs_frame.depth_sensor_microsec),
+                    format_timestamp_sec_nsec(
+                        rs_frame.depth_host_sec,
+                        rs_frame.depth_host_nanosec),
+                });
+                write_times();
+            }
             rs_writer->write_rgbd(rs_frame);
         }
 
-        const auto rs_stamp = make_frame_time(
-            rs_frame.sensor_sec,
-            rs_frame.sensor_microsec);
-        publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", rs_stamp);
-        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
+        const auto color_stamp = make_time_sec_usec(
+            rs_frame.color_sensor_sec,
+            rs_frame.color_sensor_microsec);
+        const auto depth_stamp = make_time_sec_usec(
+            rs_frame.depth_sensor_sec,
+            rs_frame.depth_sensor_microsec);
+        publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", color_stamp);
+        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", depth_stamp);
     }
 
     if (!quitFlag.load()) {
@@ -204,7 +326,6 @@ int main(int argc, char **argv)
     ros_init(argc, argv, "camera_rgbdt_node");
     rs_sync_mode = get_param<int>("rs_sync_mode", 3);
     if_save = get_param<int>("if_save", 0);
-    tempIncre_detect = get_param<int>("temp_incre_detect", 0);
     outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
@@ -222,11 +343,10 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, tempIncre_detect %d, outputdir %s, guide_query_ms %d\n",
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, outputdir %s, guide_query_ms %d\n",
            trigger_fps,
            rs_sync_mode,
            if_save,
-           tempIncre_detect,
            outputdir.c_str(),
            guide_query_ms);
 
@@ -249,7 +369,7 @@ int main(int argc, char **argv)
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(false);
-        guide->set_serial_query_interval_ms(guide_query_ms);
+        guide->set_serial_query_time(guide_query_ms);
     }
 
     if (!GuideProducer::start_serial_pair(guides)) {
@@ -324,6 +444,11 @@ int main(int argc, char **argv)
 
     for (auto& t : producers) t.join();
     for (auto& t : consumers) t.join();
+
+    if (if_save) {
+        std::lock_guard<std::mutex> lock(time_mutex);
+        write_times(true);
+    }
 
     shutdown();
     return EXIT_SUCCESS;

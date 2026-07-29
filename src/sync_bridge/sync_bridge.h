@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace LibSerial {
@@ -14,6 +15,11 @@ class SerialPort;
 }
 
 struct gpiod_line;
+
+struct TriggerEvent {
+    std::int64_t pwm_output_unix_ns = 0;
+    std::int64_t pwm_capture_unix_ns = 0;
+};
 
 class SyncBridge {
 public:
@@ -24,41 +30,30 @@ public:
         std::size_t max_queue_size = 4096;
     };
 
-    explicit SyncBridge(Config config);
-    ~SyncBridge();
+    explicit SyncBridge(Config config) : config_(std::move(config)) {}
+    ~SyncBridge() { stop(); }
 
     bool start();
     void stop();
 
-    std::int64_t take_trigger_unix_ns();
+    TriggerEvent take_trigger_event();
 
 private:
     void serial_loop();
     void gpio_loop();
-    bool open_serial();
-    void close_serial();
-    bool set_master_stream(bool enabled);
     bool send_control_request(unsigned char cmd,
                               const std::vector<unsigned char>& payload,
                               unsigned char expected_cmd);
     void handle_serial_frame(unsigned char cmd,
                              const std::vector<unsigned char>& payload);
-    bool setup_gpio();
-    void cleanup_gpio();
-    void push_serial_stamp(std::int64_t stamp_ns);
-    void push_gpio_event();
-    bool match_pending_locked();
 
     Config config_;
     std::atomic<bool> running_{false};
-    std::atomic<std::uint64_t> serial_bytes_received_{0};
-    std::atomic<std::uint64_t> serial_frames_received_{0};
-    std::atomic<std::uint64_t> gpio_events_received_{0};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::int64_t> serial_stamp_queue_;
-    std::size_t pending_gpio_events_ = 0;
-    std::deque<std::int64_t> stamp_queue_;
+    std::deque<std::int64_t> gpio_capture_queue_;
+    std::deque<TriggerEvent> trigger_event_queue_;
     std::thread serial_worker_;
     std::thread gpio_worker_;
     LibSerial::SerialPort* serial_ = nullptr;

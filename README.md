@@ -198,7 +198,7 @@ ros2 topic pub --once /guidecam/sync std_msgs/Int32 "{data: '0'}" # Sync off
 ```bash
 cd cap_ws
 source install/setup.bash
-ros2 launch camera_capturer camera_stereo.launch.py
+ros2 launch camera_capturer guidestereo.launch.py
 ```
 
 * RGBDT Launch

@@ -10,7 +10,6 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     rs_sync_mode = LaunchConfiguration("rs_sync_mode")
     if_save = LaunchConfiguration("if_save")
-    temp_incre_detect = LaunchConfiguration("temp_incre_detect")
     output_dir = LaunchConfiguration("output_dir")
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     serial_port = LaunchConfiguration("serial_port")
@@ -34,11 +33,6 @@ def generate_launch_description():
             description="Save captured data to disk when non-zero.",
         ),
         DeclareLaunchArgument(
-            "temp_incre_detect",
-            default_value="0",
-            description="Enable temperature-increase-triggered save mode when non-zero.",
-        ),
-        DeclareLaunchArgument(
             "output_dir",
             default_value="/home/pi/Cap_ws",
             description="Output directory used when if_save is enabled.",
@@ -46,7 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "guide_query_ms",
             default_value="100",
-            description="Guide camera serial status query interval in milliseconds.",
+            description="Guide camera serial status query interval (ms).",
         ),
         DeclareLaunchArgument(
             "serial_port",
@@ -75,13 +69,12 @@ def generate_launch_description():
         ),
         Node(
             package="camera_capturer",
-            executable="camera_RGBDT_sync_node",
-            name="camera_rgbdt_sync_node",
+            executable="rgbdt_trigger_node",
+            name="rgbdt_trigger_node",
             output="screen",
             parameters=[{
                 "rs_sync_mode": rs_sync_mode,
                 "if_save": if_save,
-                "temp_incre_detect": temp_incre_detect,
                 "output_dir": output_dir,
                 "guide_query_ms": guide_query_ms,
                 "serial_port": serial_port,
@@ -93,7 +86,7 @@ def generate_launch_description():
         Node(
             package="rviz2",
             executable="rviz2",
-            name="camera_rgbdt_rviz",
+            name="rgbdt_rviz",
             arguments=["-d", rviz_config],
             condition=IfCondition(use_rviz),
             output="screen",

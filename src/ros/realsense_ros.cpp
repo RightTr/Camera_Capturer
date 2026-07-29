@@ -13,12 +13,15 @@
 #include "device_path.h"
 #include "producer/realsense_producer.h"
 #include "utils/ros_utils.h"
+#include "writer/realsense_writer.h"
 
 using ImagePublisher = Publisher<ImageMsg>;
 using ImuPublisher = Publisher<ImuMsg>;
 
 std::atomic<bool> quitFlag(false);
 std::unique_ptr<RealSenseProducer> rs_prod;
+std::unique_ptr<RealSenseWriter> rs_writer;
+int if_save = 0;
 
 ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
@@ -39,9 +42,18 @@ void realsense_consumer()
         StampedRealSenseFrame frame;
         if (!rs_prod->pop_rgbd(frame)) break;
 
-        const auto stamp = make_time_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-        publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", stamp);
-        publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", stamp);
+        if (if_save) {
+            rs_writer->write_rgbd(frame);
+        }
+
+        const auto color_stamp = make_time_sec_usec(
+            frame.color_sensor_sec,
+            frame.color_sensor_microsec);
+        const auto depth_stamp = make_time_sec_usec(
+            frame.depth_sensor_sec,
+            frame.depth_sensor_microsec);
+        publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", color_stamp);
+        publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", depth_stamp);
     }
 
     if (!quitFlag.load()) {
@@ -55,6 +67,10 @@ void imu_consumer()
     while (!quitFlag.load()) {
         StampedImuFrame frame;
         if (!rs_prod->pop_imu(frame)) break;
+
+        if (if_save) {
+            rs_writer->write_imu(frame);
+        }
 
         if (frame.stream_type == RS2_STREAM_ACCEL) {
             publish_accel_measurement(
@@ -90,8 +106,17 @@ int main(int argc, char **argv)
     const int imu_fps = get_param<int>("imu_fps", 200);
     const bool enable_align = get_param<bool>("enable_align", true);
     const bool enable_filter = get_param<bool>("enable_filter", true);
-    const int rgb_queue_size = get_param<int>("rgb_queue_size", 30);
+    const int rgbd_queue_size = get_param<int>("rgbd_queue_size", 30);
     const int imu_queue_size = get_param<int>("imu_queue_size", 400);
+    if_save = get_param<int>("if_save", 0);
+    const std::string outputdir = get_param<std::string>("output_dir", "/home/pi/Cap_ws");
+
+    if (if_save) {
+        rs_writer = std::make_unique<RealSenseWriter>(outputdir);
+        if (!rs_writer->open()) {
+            return EXIT_FAILURE;
+        }
+    }
 
     g_rs_rgb_pub = advertise<ImageMsg>("realsense/rgb/image", 5);
     g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
@@ -109,9 +134,17 @@ int main(int argc, char **argv)
             quitFlag.store(true);
             rs_ready_cv.notify_all();
         },
-        [&](const rs2::pipeline_profile&) {
+        [&](const rs2::pipeline_profile& profile) {
+            if (if_save) {
+                rs_writer->write_intrinsics(profile);
+            }
             rs_ready.store(true, std::memory_order_relaxed);
             rs_ready_cv.notify_all();
+        },
+        [](double scale) {
+            if (if_save) {
+                rs_writer->write_depth_scale(scale);
+            }
         });
     rs_prod->set_sync_mode(rs_sync_mode);
     rs_prod->set_camera_fps(fps);
@@ -119,7 +152,7 @@ int main(int argc, char **argv)
     rs_prod->set_imu_fps(imu_fps);
     rs_prod->set_align_enabled(enable_align);
     rs_prod->set_filter_enabled(enable_filter);
-    rs_prod->set_rgb_queue_size(rgb_queue_size);
+    rs_prod->set_rgbd_queue_size(rgbd_queue_size);
     rs_prod->set_imu_queue_size(imu_queue_size);
 
     std::vector<std::thread> threads;

@@ -1,20 +1,16 @@
 #include "sync_bridge/sync_bridge.h"
 
-#include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <cstdio>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <gpiod.h>
 #include <libserial/SerialPort.h>
 
-namespace {
+#include "utils/common_utils.h"
 
-constexpr const char* kConsumerName = "camera_capturer_sync_bridge";
-constexpr int kGpioWaitTimeoutMs = 100;
+constexpr const char* kConsumerName = "cap_trigger";
 constexpr unsigned char kRxFrameHead0 = 0xFF;
 constexpr unsigned char kRxFrameHead1 = 0xFE;
 constexpr unsigned char kTxFrameHead0 = 0xEE;
@@ -27,74 +23,16 @@ constexpr unsigned char kFrameTail1 = 0xDD;
 constexpr int kControlReadTimeoutMs = 150;
 constexpr int kControlMaxFrameLen = 64;
 
-void log_errno(const char* message)
-{
-    std::fprintf(stderr, "%s: %s (errno=%d)\n", message, std::strerror(errno), errno);
-}
-
-LibSerial::BaudRate baud_rate_from_int(int baud)
-{
-    switch (baud) {
-    case 9600: return LibSerial::BaudRate::BAUD_9600;
-    case 19200: return LibSerial::BaudRate::BAUD_19200;
-    case 38400: return LibSerial::BaudRate::BAUD_38400;
-    case 57600: return LibSerial::BaudRate::BAUD_57600;
-    case 115200: return LibSerial::BaudRate::BAUD_115200;
-    case 230400: return LibSerial::BaudRate::BAUD_230400;
-    case 460800: return LibSerial::BaudRate::BAUD_460800;
-    case 921600: return LibSerial::BaudRate::BAUD_921600;
-    default: return LibSerial::BaudRate::BAUD_115200;
-    }
-}
-
-std::uint32_t read_u32_le(const unsigned char* data)
-{
-    return static_cast<std::uint32_t>(data[0]) |
-           (static_cast<std::uint32_t>(data[1]) << 8) |
-           (static_cast<std::uint32_t>(data[2]) << 16) |
-           (static_cast<std::uint32_t>(data[3]) << 24);
-}
-
-std::uint64_t read_u64_le(const unsigned char* data)
-{
-    std::uint64_t value = 0;
-    for (int i = 0; i < 8; ++i) {
-        value |= static_cast<std::uint64_t>(data[i]) << (8 * i);
-    }
-    return value;
-}
-
-unsigned char checksum(unsigned char cmd, const std::vector<unsigned char>& payload)
-{
-    unsigned char value = cmd ^ static_cast<unsigned char>(payload.size());
-    for (const unsigned char byte : payload) {
-        value ^= byte;
-    }
-    return value;
-}
-
-unsigned char checksum(unsigned char cmd,
-                       unsigned char length,
-                       const unsigned char* payload)
-{
-    unsigned char value = cmd ^ length;
-    for (unsigned char i = 0; i < length; ++i) {
-        value ^= payload[i];
-    }
-    return value;
-}
-
-}  // namespace
-
-SyncBridge::SyncBridge(Config config)
-    : config_(std::move(config))
-{
-}
-
-SyncBridge::~SyncBridge()
-{
-    stop();
-}
+enum class FrameState {
+    HEAD0,
+    HEAD1,
+    CMD,
+    LEN,
+    PAYLOAD,
+    CHECKSUM,
+    TAIL0,
+    TAIL1
+};
 
 bool SyncBridge::start()
 {
@@ -114,20 +52,52 @@ bool SyncBridge::start()
     }
 
     serial_ = new LibSerial::SerialPort();
-    if (!open_serial()) {
-        close_serial();
+    try {
+        serial_->Open(config_.serial_port);
+        serial_->SetBaudRate(set_baudrate(config_.serial_baud));
+        serial_->SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
+        serial_->SetParity(LibSerial::Parity::PARITY_NONE);
+        serial_->SetStopBits(LibSerial::StopBits::STOP_BITS_1);
+        serial_->SetFlowControl(LibSerial::FlowControl::FLOW_CONTROL_NONE);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Failed to open time serial port %s: %s\n",
+                     config_.serial_port.c_str(),
+                     e.what());
+        delete serial_;
+        serial_ = nullptr;
         running_.store(false);
         return false;
     }
-    if (!set_master_stream(true)) {
-        close_serial();
+
+    if (!send_control_request(
+            kSetMasterStreamCmd,
+            {1},
+            kSetMasterStreamCmd)) {
+        serial_->Close();
+        delete serial_;
+        serial_ = nullptr;
         running_.store(false);
         return false;
     }
-    if (!setup_gpio()) {
-        set_master_stream(false);
-        cleanup_gpio();
-        close_serial();
+
+    gpio_line_ = gpiod_line_find(config_.pwm_line.c_str());
+    if (!gpio_line_) {
+        log_errno("gpiod_line_find failed");
+        send_control_request(kSetMasterStreamCmd, {0}, kSetMasterStreamCmd);
+        serial_->Close();
+        delete serial_;
+        serial_ = nullptr;
+        running_.store(false);
+        return false;
+    }
+    if (gpiod_line_request_rising_edge_events(gpio_line_, kConsumerName) < 0) {
+        log_errno("gpiod_line_request_rising_edge_events failed");
+        gpiod_line_close_chip(gpio_line_);
+        gpio_line_ = nullptr;
+        send_control_request(kSetMasterStreamCmd, {0}, kSetMasterStreamCmd);
+        serial_->Close();
+        delete serial_;
+        serial_ = nullptr;
         running_.store(false);
         return false;
     }
@@ -157,72 +127,39 @@ void SyncBridge::stop()
         gpio_worker_.join();
     }
 
-    set_master_stream(false);
-    cleanup_gpio();
-    close_serial();
+    send_control_request(kSetMasterStreamCmd, {0}, kSetMasterStreamCmd);
+    if (gpio_line_) {
+        gpiod_line_release(gpio_line_);
+        gpiod_line_close_chip(gpio_line_);
+        gpio_line_ = nullptr;
+    }
+    if (serial_) {
+        try {
+            if (serial_->IsOpen()) {
+                serial_->Close();
+            }
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "Failed to close time serial port: %s\n", e.what());
+        }
+        delete serial_;
+        serial_ = nullptr;
+    }
 }
 
-std::int64_t SyncBridge::take_trigger_unix_ns()
+TriggerEvent SyncBridge::take_trigger_event()
 {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait_for(lock, std::chrono::milliseconds(20), [&] {
-        return !stamp_queue_.empty() || !running_.load(std::memory_order_relaxed);
+        return !trigger_event_queue_.empty() || !running_.load(std::memory_order_relaxed);
     });
 
-    if (stamp_queue_.empty()) {
-        return 0;
+    if (trigger_event_queue_.empty()) {
+        return {};
     }
 
-    const std::int64_t stamp = stamp_queue_.front();
-    stamp_queue_.pop_front();
-    return stamp;
-}
-
-bool SyncBridge::open_serial()
-{
-    try {
-        serial_->Open(config_.serial_port);
-        serial_->SetBaudRate(baud_rate_from_int(config_.serial_baud));
-        serial_->SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
-        serial_->SetParity(LibSerial::Parity::PARITY_NONE);
-        serial_->SetStopBits(LibSerial::StopBits::STOP_BITS_1);
-        serial_->SetFlowControl(LibSerial::FlowControl::FLOW_CONTROL_NONE);
-        std::printf("Opened time serial port %s at %d baud\n",
-                    config_.serial_port.c_str(),
-                    config_.serial_baud);
-        return true;
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Failed to open time serial port %s: %s\n",
-                     config_.serial_port.c_str(),
-                     e.what());
-        return false;
-    }
-}
-
-void SyncBridge::close_serial()
-{
-    if (!serial_) {
-        return;
-    }
-
-    try {
-        if (serial_->IsOpen()) {
-            serial_->Close();
-        }
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Failed to close time serial port: %s\n", e.what());
-    }
-
-    delete serial_;
-    serial_ = nullptr;
-}
-
-bool SyncBridge::set_master_stream(bool enabled)
-{
-    return send_control_request(
-        kSetMasterStreamCmd,
-        {static_cast<unsigned char>(enabled ? 1 : 0)},
-        kSetMasterStreamCmd);
+    const TriggerEvent event = trigger_event_queue_.front();
+    trigger_event_queue_.pop_front();
+    return event;
 }
 
 bool SyncBridge::send_control_request(unsigned char cmd,
@@ -241,7 +178,7 @@ bool SyncBridge::send_control_request(unsigned char cmd,
     frame.push_back(cmd);
     frame.push_back(static_cast<unsigned char>(payload.size()));
     frame.insert(frame.end(), payload.begin(), payload.end());
-    frame.push_back(checksum(cmd, payload));
+    frame.push_back(checksum(cmd, static_cast<unsigned char>(payload.size()), payload.data()));
     frame.push_back(kFrameTail0);
     frame.push_back(kFrameTail1);
 
@@ -250,18 +187,7 @@ bool SyncBridge::send_control_request(unsigned char cmd,
         serial_->DrainWriteBuffer();
 
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
-        enum class State {
-            HEAD0,
-            HEAD1,
-            CMD,
-            LEN,
-            PAYLOAD,
-            CHECKSUM,
-            TAIL0,
-            TAIL1
-        };
-
-        State state = State::HEAD0;
+        FrameState state = FrameState::HEAD0;
         unsigned char response_cmd = 0;
         unsigned char length = 0;
         unsigned char received_checksum = 0;
@@ -279,50 +205,50 @@ bool SyncBridge::send_control_request(unsigned char cmd,
             }
 
             switch (state) {
-            case State::HEAD0:
+            case FrameState::HEAD0:
                 if (byte == kTxFrameHead0) {
-                    state = State::HEAD1;
+                    state = FrameState::HEAD1;
                 }
                 break;
-            case State::HEAD1:
+            case FrameState::HEAD1:
                 if (byte == kTxFrameHead1) {
-                    state = State::CMD;
+                    state = FrameState::CMD;
                 } else {
-                    state = byte == kTxFrameHead0 ? State::HEAD1 : State::HEAD0;
+                    state = byte == kTxFrameHead0 ? FrameState::HEAD1 : FrameState::HEAD0;
                 }
                 break;
-            case State::CMD:
+            case FrameState::CMD:
                 response_cmd = byte;
-                state = State::LEN;
+                state = FrameState::LEN;
                 break;
-            case State::LEN:
+            case FrameState::LEN:
                 length = byte;
                 if (length > kControlMaxFrameLen) {
-                    state = State::HEAD0;
+                    state = FrameState::HEAD0;
                     break;
                 }
                 response_payload.clear();
                 response_payload.reserve(length);
-                state = length == 0 ? State::CHECKSUM : State::PAYLOAD;
+                state = length == 0 ? FrameState::CHECKSUM : FrameState::PAYLOAD;
                 break;
-            case State::PAYLOAD:
+            case FrameState::PAYLOAD:
                 response_payload.push_back(byte);
                 if (response_payload.size() == length) {
-                    state = State::CHECKSUM;
+                    state = FrameState::CHECKSUM;
                 }
                 break;
-            case State::CHECKSUM:
+            case FrameState::CHECKSUM:
                 received_checksum = byte;
-                state = State::TAIL0;
+                state = FrameState::TAIL0;
                 break;
-            case State::TAIL0:
-                state = byte == kFrameTail0 ? State::TAIL1 : State::HEAD0;
+            case FrameState::TAIL0:
+                state = byte == kFrameTail0 ? FrameState::TAIL1 : FrameState::HEAD0;
                 break;
-            case State::TAIL1:
+            case FrameState::TAIL1:
                 if (byte == kFrameTail1 &&
                     received_checksum == checksum(response_cmd, length, response_payload.data())) {
                     if (response_cmd == kMasterTriggerCmd) {
-                        state = State::HEAD0;
+                        state = FrameState::HEAD0;
                         break;
                     }
                     if (response_cmd == expected_cmd) {
@@ -330,7 +256,7 @@ bool SyncBridge::send_control_request(unsigned char cmd,
                         return true;
                     }
                 }
-                state = State::HEAD0;
+                state = FrameState::HEAD0;
                 break;
             }
         }
@@ -347,119 +273,43 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
                                      const std::vector<unsigned char>& payload)
 {
     if (cmd != kMasterTriggerCmd) {
-        static unsigned int ignored_frame_logs = 0;
-        if (ignored_frame_logs < 5) {
-            std::printf("Time serial frame ignored: cmd=0x%02X, len=%zu\n",
-                        cmd,
-                        payload.size());
-            ++ignored_frame_logs;
-        }
         return;
     }
     if (payload.size() != kMasterTriggerPayloadLen) {
         return;
     }
 
-    const std::uint32_t trigger_count = read_u32_le(payload.data());
     const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
-    const auto stamp_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
-    serial_frames_received_.fetch_add(1, std::memory_order_relaxed);
-    std::printf("Serial trigger time received: count=%u, unix_ns=%lld\n",
-                trigger_count,
-                static_cast<long long>(stamp_ns));
-    push_serial_stamp(stamp_ns);
-}
+    const auto output_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
 
-bool SyncBridge::setup_gpio()
-{
-    gpio_line_ = gpiod_line_find(config_.pwm_line.c_str());
-    if (!gpio_line_) {
-        log_errno("gpiod_line_find failed");
-        return false;
-    }
-
-    if (gpiod_line_request_rising_edge_events(gpio_line_, kConsumerName) < 0) {
-        log_errno("gpiod_line_request_rising_edge_events failed");
-        gpiod_line_close_chip(gpio_line_);
-        gpio_line_ = nullptr;
-        return false;
-    }
-
-    std::printf("Listening for PWM rising edges on GPIO line %s\n",
-                config_.pwm_line.c_str());
-    return true;
-}
-
-void SyncBridge::cleanup_gpio()
-{
-    if (!gpio_line_) {
-        return;
-    }
-
-    gpiod_line_release(gpio_line_);
-    gpiod_line_close_chip(gpio_line_);
-    gpio_line_ = nullptr;
-}
-
-void SyncBridge::push_serial_stamp(std::int64_t stamp_ns)
-{
     std::lock_guard<std::mutex> lock(mutex_);
-    serial_stamp_queue_.push_back(stamp_ns);
+    serial_stamp_queue_.push_back(output_ns);
     while (serial_stamp_queue_.size() > config_.max_queue_size) {
         serial_stamp_queue_.pop_front();
     }
-    if (match_pending_locked()) {
-        cv_.notify_one();
-    }
-}
 
-void SyncBridge::push_gpio_event()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    ++pending_gpio_events_;
-    if (pending_gpio_events_ > config_.max_queue_size) {
-        --pending_gpio_events_;
-    }
-    if (match_pending_locked()) {
-        cv_.notify_one();
-    }
-}
-
-bool SyncBridge::match_pending_locked()
-{
-    bool matched = false;
-    while (pending_gpio_events_ > 0 && !serial_stamp_queue_.empty()) {
-        const std::int64_t stamp_ns = serial_stamp_queue_.front();
+    while (!gpio_capture_queue_.empty() && !serial_stamp_queue_.empty()) {
+        const std::int64_t output_ns = serial_stamp_queue_.front();
+        const std::int64_t capture_ns = gpio_capture_queue_.front();
         serial_stamp_queue_.pop_front();
-        --pending_gpio_events_;
+        gpio_capture_queue_.pop_front();
 
-        stamp_queue_.push_back(stamp_ns);
-        while (stamp_queue_.size() > config_.max_queue_size) {
-            stamp_queue_.pop_front();
+        trigger_event_queue_.push_back({output_ns, capture_ns});
+        while (trigger_event_queue_.size() > config_.max_queue_size) {
+            trigger_event_queue_.pop_front();
         }
 
-        std::printf("PWM trigger matched on %s: %lld ns\n",
+        std::printf("PWM trigger matched on %s: output=%lld ns, capture=%lld ns\n",
                     config_.pwm_line.c_str(),
-                    static_cast<long long>(stamp_ns));
-        matched = true;
+                    static_cast<long long>(output_ns),
+                    static_cast<long long>(capture_ns));
+        cv_.notify_one();
     }
-    return matched;
 }
 
 void SyncBridge::serial_loop()
 {
-    enum class ParseState {
-        HEAD0,
-        HEAD1,
-        CMD,
-        LEN,
-        PAYLOAD,
-        CHECKSUM,
-        TAIL0,
-        TAIL1
-    };
-
-    ParseState state = ParseState::HEAD0;
+    FrameState state = FrameState::HEAD0;
     std::vector<unsigned char> payload;
     payload.reserve(kControlMaxFrameLen);
     std::size_t payload_index = 0;
@@ -471,7 +321,6 @@ void SyncBridge::serial_loop()
         unsigned char byte = 0;
         try {
             serial_->ReadByte(byte, 100);
-            serial_bytes_received_.fetch_add(1, std::memory_order_relaxed);
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("timeout") != std::string::npos) {
                 continue;
@@ -481,55 +330,55 @@ void SyncBridge::serial_loop()
         }
 
         switch (state) {
-        case ParseState::HEAD0:
+        case FrameState::HEAD0:
             if (byte == kTxFrameHead0) {
-                state = ParseState::HEAD1;
+                state = FrameState::HEAD1;
             }
             break;
-        case ParseState::HEAD1:
+        case FrameState::HEAD1:
             if (byte == kTxFrameHead1) {
-                state = ParseState::CMD;
+                state = FrameState::CMD;
             } else {
-                state = byte == kTxFrameHead0 ? ParseState::HEAD1 : ParseState::HEAD0;
+                state = byte == kTxFrameHead0 ? FrameState::HEAD1 : FrameState::HEAD0;
             }
             break;
-        case ParseState::CMD:
+        case FrameState::CMD:
             cmd = byte;
-            state = ParseState::LEN;
+            state = FrameState::LEN;
             break;
-        case ParseState::LEN:
+        case FrameState::LEN:
             length = byte;
             if (length > kControlMaxFrameLen) {
-                state = ParseState::HEAD0;
+                state = FrameState::HEAD0;
                 break;
             }
             payload.clear();
             payload_index = 0;
-            state = length == 0 ? ParseState::CHECKSUM : ParseState::PAYLOAD;
+            state = length == 0 ? FrameState::CHECKSUM : FrameState::PAYLOAD;
             break;
-        case ParseState::PAYLOAD:
+        case FrameState::PAYLOAD:
             payload.push_back(byte);
             ++payload_index;
             if (payload_index == length) {
-                state = ParseState::CHECKSUM;
+                state = FrameState::CHECKSUM;
             }
             break;
-        case ParseState::CHECKSUM:
+        case FrameState::CHECKSUM:
             received_checksum = byte;
             if (received_checksum != checksum(cmd, length, payload.data())) {
-                state = ParseState::HEAD0;
+                state = FrameState::HEAD0;
                 break;
             }
-            state = ParseState::TAIL0;
+            state = FrameState::TAIL0;
             break;
-        case ParseState::TAIL0:
-            state = byte == kFrameTail0 ? ParseState::TAIL1 : ParseState::HEAD0;
+        case FrameState::TAIL0:
+            state = byte == kFrameTail0 ? FrameState::TAIL1 : FrameState::HEAD0;
             break;
-        case ParseState::TAIL1:
+        case FrameState::TAIL1:
             if (byte == kFrameTail1) {
                 handle_serial_frame(cmd, payload);
             }
-            state = ParseState::HEAD0;
+            state = FrameState::HEAD0;
             break;
         }
     }
@@ -539,8 +388,8 @@ void SyncBridge::gpio_loop()
 {
     while (running_.load(std::memory_order_relaxed)) {
         struct timespec timeout {};
-        timeout.tv_sec = kGpioWaitTimeoutMs / 1000;
-        timeout.tv_nsec = (kGpioWaitTimeoutMs % 1000) * 1000000L;
+        timeout.tv_sec = 0;
+        timeout.tv_nsec = 40 * 1000000L;
 
         const int ret = gpiod_line_event_wait(gpio_line_, &timeout);
         if (!running_.load(std::memory_order_relaxed)) {
@@ -563,7 +412,28 @@ void SyncBridge::gpio_loop()
             continue;
         }
 
-        gpio_events_received_.fetch_add(1, std::memory_order_relaxed);
-        push_gpio_event();
+        std::lock_guard<std::mutex> lock(mutex_);
+        gpio_capture_queue_.push_back(system_time_ns_now());
+        while (gpio_capture_queue_.size() > config_.max_queue_size) {
+            gpio_capture_queue_.pop_front();
+        }
+
+        while (!gpio_capture_queue_.empty() && !serial_stamp_queue_.empty()) {
+            const std::int64_t output_ns = serial_stamp_queue_.front();
+            const std::int64_t capture_ns = gpio_capture_queue_.front();
+            serial_stamp_queue_.pop_front();
+            gpio_capture_queue_.pop_front();
+
+            trigger_event_queue_.push_back({output_ns, capture_ns});
+            while (trigger_event_queue_.size() > config_.max_queue_size) {
+                trigger_event_queue_.pop_front();
+            }
+
+            std::printf("PWM trigger matched on %s: output=%lld ns, capture=%lld ns\n",
+                        config_.pwm_line.c_str(),
+                        static_cast<long long>(output_ns),
+                        static_cast<long long>(capture_ns));
+            cv_.notify_one();
+        }
     }
 }

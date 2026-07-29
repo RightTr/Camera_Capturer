@@ -29,7 +29,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "guide_query_ms",
             default_value="100",
-            description="Guide camera serial status query interval in milliseconds.",
+            description="Guide camera serial status query interval (ms).",
         ),
         DeclareLaunchArgument(
             "serial_port",
@@ -63,8 +63,8 @@ def generate_launch_description():
         ),
         Node(
             package="camera_capturer",
-            executable="guidestereo_sync_node",
-            name="camera_stereo_sync_node",
+            executable="guidestereo_trigger_node",
+            name="guidestereo_trigger_node",
             output="screen",
             parameters=[{
                 "guide_query_ms": guide_query_ms,
@@ -79,7 +79,7 @@ def generate_launch_description():
         Node(
             package="rviz2",
             executable="rviz2",
-            name="camera_stereo_rviz",
+            name="guidestereo_rviz",
             arguments=["-d", rviz_config],
             condition=IfCondition(use_rviz),
             output="screen",

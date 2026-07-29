@@ -20,7 +20,7 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<GuideWriter> guide_writers[2];
-std::ofstream sync_time_stream;
+std::ofstream time_stream;
 
 bool open_writers(const std::string& base_dir)
 {
@@ -33,11 +33,11 @@ bool open_writers(const std::string& base_dir)
         }
     }
 
-    sync_time_stream.open(base_dir + "/sync_times.csv");
-    if (!sync_time_stream.is_open()) {
+    time_stream.open(base_dir + "/times.csv");
+    if (!time_stream.is_open()) {
         return false;
     }
-    sync_time_stream << "pwm_capture_time,left_host_time,right_host_time\n";
+    time_stream << "pwm_output_time,pwm_capture_time,left_host_time,right_host_time\n";
     return true;
 }
 
@@ -54,29 +54,30 @@ void stereo_publisher(const ImagePublisher& left_image_pub,
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
 
-        const std::int64_t stamp_ns = sync_bridge.take_trigger_unix_ns();
-        if (stamp_ns <= 0) {
+        const TriggerEvent trigger_event = sync_bridge.take_trigger_event();
+        if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
 
-        left_frame.trigger_unix_ns = stamp_ns;
-        right_frame.trigger_unix_ns = stamp_ns;
+        left_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
+        right_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
 
         if (if_save) {
-            if (sync_time_stream.is_open()) {
-                sync_time_stream << format_timestamp_ns(stamp_ns) << ","
-                                 << format_timestamp_sec_nsec(
-                                        left_frame.host_sec,
-                                        left_frame.host_nanosec) << ","
-                                 << format_timestamp_sec_nsec(
-                                        right_frame.host_sec,
-                                        right_frame.host_nanosec) << "\n";
+            if (time_stream.is_open()) {
+                time_stream << format_timestamp_ns(trigger_event.pwm_output_unix_ns) << ","
+                            << format_timestamp_ns(trigger_event.pwm_capture_unix_ns) << ","
+                            << format_timestamp_sec_nsec(
+                                   left_frame.host_sec,
+                                   left_frame.host_nanosec) << ","
+                            << format_timestamp_sec_nsec(
+                                   right_frame.host_sec,
+                                   right_frame.host_nanosec) << "\n";
             }
             guide_writers[0]->write(left_frame);
             guide_writers[1]->write(right_frame);
         }
 
-        const auto stamp = make_time_ns(static_cast<uint64_t>(stamp_ns));
+        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.pwm_output_unix_ns));
         publish_image(left_image_pub, left_frame.gray_image, "mono8", "guide_left", stamp);
         publish_image(left_temp_pub, left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
         publish_image(right_image_pub, right_frame.gray_image, "mono8", "guide_right", stamp);
@@ -91,7 +92,7 @@ int main(int argc, char **argv) {
     const char* dev_left = device_path::kLeftCamera;
     const char* dev_right = device_path::kRightCamera;
 
-    ros_init(argc, argv, "guidestereo_sync_node");
+    ros_init(argc, argv, "guidestereo_trigger_node");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
@@ -126,7 +127,7 @@ int main(int argc, char **argv) {
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(true);
-        guide->set_serial_query_interval_ms(guide_query_ms);
+        guide->set_serial_query_time(guide_query_ms);
     }
 
     if (if_save && !open_writers(outputdir)) {

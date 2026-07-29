@@ -10,7 +10,6 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     rs_sync_mode = LaunchConfiguration("rs_sync_mode")
     if_save = LaunchConfiguration("if_save")
-    temp_incre_detect = LaunchConfiguration("temp_incre_detect")
     output_dir = LaunchConfiguration("output_dir")
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     use_rviz = LaunchConfiguration("use_rviz")
@@ -30,11 +29,6 @@ def generate_launch_description():
             description="Save captured data to disk when non-zero.",
         ),
         DeclareLaunchArgument(
-            "temp_incre_detect",
-            default_value="0",
-            description="Enable temperature-increase-triggered save mode when non-zero.",
-        ),
-        DeclareLaunchArgument(
             "output_dir",
             default_value="/home/pi/Cap_ws",
             description="Output directory used when if_save is enabled.",
@@ -42,7 +36,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "guide_query_ms",
             default_value="100",
-            description="Guide camera serial status query interval in milliseconds.",
+            description="Guide camera serial status query interval (ms).",
         ),
         DeclareLaunchArgument(
             "use_rviz",
@@ -57,7 +51,6 @@ def generate_launch_description():
             parameters=[{
                 "rs_sync_mode": rs_sync_mode,
                 "if_save": if_save,
-                "temp_incre_detect": temp_incre_detect,
                 "output_dir": output_dir,
                 "guide_query_ms": guide_query_ms,
             }],

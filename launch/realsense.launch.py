@@ -15,8 +15,10 @@ def generate_launch_description():
     imu_fps = LaunchConfiguration("imu_fps")
     enable_align = LaunchConfiguration("enable_align")
     enable_filter = LaunchConfiguration("enable_filter")
-    rgb_queue_size = LaunchConfiguration("rgb_queue_size")
+    rgbd_queue_size = LaunchConfiguration("rgbd_queue_size")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
+    if_save = LaunchConfiguration("if_save")
+    output_dir = LaunchConfiguration("output_dir")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -54,7 +56,7 @@ def generate_launch_description():
             description="Apply spatial and temporal filters to depth.",
         ),
         DeclareLaunchArgument(
-            "rgb_queue_size",
+            "rgbd_queue_size",
             default_value="30",
             description="Internal RGBD producer queue size.",
         ),
@@ -62,6 +64,16 @@ def generate_launch_description():
             "imu_queue_size",
             default_value="400",
             description="Internal IMU producer queue size.",
+        ),
+        DeclareLaunchArgument(
+            "if_save",
+            default_value="0",
+            description="Save RealSense RGBD and IMU data when nonzero.",
+        ),
+        DeclareLaunchArgument(
+            "output_dir",
+            default_value="/home/pi/Cap_ws",
+            description="Directory used when if_save is enabled.",
         ),
         DeclareLaunchArgument(
             "use_rviz",
@@ -80,8 +92,10 @@ def generate_launch_description():
                 "imu_fps": ParameterValue(imu_fps, value_type=int),
                 "enable_align": ParameterValue(enable_align, value_type=bool),
                 "enable_filter": ParameterValue(enable_filter, value_type=bool),
-                "rgb_queue_size": ParameterValue(rgb_queue_size, value_type=int),
+                "rgbd_queue_size": ParameterValue(rgbd_queue_size, value_type=int),
                 "imu_queue_size": ParameterValue(imu_queue_size, value_type=int),
+                "if_save": ParameterValue(if_save, value_type=int),
+                "output_dir": output_dir,
             }],
         ),
         Node(

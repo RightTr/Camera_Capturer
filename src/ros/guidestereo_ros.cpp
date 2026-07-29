@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <string>
@@ -7,24 +8,64 @@
 
 #include "device_path.h"
 #include "producer/guide_producer.h"
+#include "utils/common_utils.h"
 #include "utils/ros_utils.h"
+#include "writer/guide_writer.h"
 
 using ImagePublisher = Publisher<ImageMsg>;
 using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 std::unique_ptr<GuideProducer> guides[2];
+std::unique_ptr<GuideWriter> guide_writers[2];
+std::ofstream time_stream;
 
-void publisher(int id, const ImagePublisher& image_pub, const ImagePublisher& temp_pub)
+bool open_writers(const std::string& base_dir)
+{
+    for (int i = 0; i < 2; ++i) {
+        guide_writers[i] = std::make_unique<GuideWriter>(
+            base_dir,
+            GuideProducer::camera_name(i));
+        if (!guide_writers[i]->open()) {
+            return false;
+        }
+    }
+    time_stream.open(base_dir + "/times.csv");
+    if (!time_stream.is_open()) {
+        return false;
+    }
+    time_stream << "left_host_time,right_host_time\n";
+    return true;
+}
+
+void stereo_publisher(const std::vector<ImagePublisher>& image_pubs,
+                      const std::vector<ImagePublisher>& temp_pubs,
+                      bool if_save)
 {
     while (ok()) {
-        GuideFrame frame;
-        if (!guides[id]->pop(frame)) break;
+        GuideFrame left_frame;
+        GuideFrame right_frame;
+        if (!guides[0]->pop(left_frame)) break;
+        if (!guides[1]->pop(right_frame)) break;
 
-        const auto stamp = make_time_sec_nsec(frame.host_sec, frame.host_nanosec);
-        const std::string frame_id = (id == 0) ? "guide_left" : "guide_right";
+        if (if_save) {
+            if (time_stream.is_open()) {
+                time_stream << format_timestamp_sec_nsec(
+                                   left_frame.host_sec,
+                                   left_frame.host_nanosec) << ","
+                            << format_timestamp_sec_nsec(
+                                   right_frame.host_sec,
+                                   right_frame.host_nanosec) << "\n";
+            }
+            guide_writers[0]->write(left_frame);
+            guide_writers[1]->write(right_frame);
+        }
 
-        publish_image(image_pub, frame.gray_image, "mono8", frame_id, stamp);
-        publish_image(temp_pub, frame.temperature_celsius, "32FC1", frame_id, stamp);
+        const auto left_stamp = make_time_sec_nsec(left_frame.host_sec, left_frame.host_nanosec);
+        const auto right_stamp = make_time_sec_nsec(right_frame.host_sec, right_frame.host_nanosec);
+        publish_image(image_pubs[0], left_frame.gray_image, "mono8", "guide_left", left_stamp);
+        publish_image(temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", left_stamp);
+        publish_image(image_pubs[1], right_frame.gray_image, "mono8", "guide_right", right_stamp);
+        publish_image(temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", right_stamp);
     }
 }
 
@@ -37,6 +78,8 @@ int main(int argc, char **argv) {
 
     ros_init(argc, argv, "guidestereo_node");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
+    const int if_save = get_param<int>("if_save", 0);
+    const std::string outputdir = get_param<std::string>("output_dir", "./capture");
 
     std::vector<ImagePublisher> image_pubs;
     image_pubs.push_back(advertise<ImageMsg>("guide_left/image", 5));
@@ -67,10 +110,17 @@ int main(int argc, char **argv) {
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(true);
-        guide->set_serial_query_interval_ms(guide_query_ms);
+        guide->set_serial_query_time(guide_query_ms);
     }
 
-    if (!GuideProducer::start_serial_pair(guides)) {
+    if (if_save && !open_writers(outputdir)) {
+        return EXIT_FAILURE;
+    }
+
+    if (!GuideProducer::start_serial_pair(
+            guides,
+            if_save ? guide_writers[0]->temp_stream() : nullptr,
+            if_save ? guide_writers[1]->temp_stream() : nullptr)) {
         return EXIT_FAILURE;
     }
 
@@ -78,10 +128,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    std::vector<std::thread> publishers;
-    for (int i = 0; i < 2; ++i) {
-        publishers.emplace_back(publisher, i, std::ref(image_pubs[i]), std::ref(temp_pubs[i]));
-    }
+    std::thread publisher(stereo_publisher, std::ref(image_pubs), std::ref(temp_pubs), if_save != 0);
 
     const int numProducers = 2;
     std::vector<std::thread> producers;
@@ -103,9 +150,7 @@ int main(int argc, char **argv) {
         t.join();
     }
 
-    for (auto& t : publishers) {
-        t.join();
-    }
+    publisher.join();
     shutdown();
     return EXIT_SUCCESS;
 }

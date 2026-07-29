@@ -10,6 +10,8 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
     guide_query_ms = LaunchConfiguration("guide_query_ms")
+    if_save = LaunchConfiguration("if_save")
+    output_dir = LaunchConfiguration("output_dir")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "stereo.rviz"]
     )
@@ -23,21 +25,33 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "guide_query_ms",
             default_value="100",
-            description="Guide camera serial status query interval in milliseconds.",
+            description="Guide camera serial status query interval (ms).",
+        ),
+        DeclareLaunchArgument(
+            "if_save",
+            default_value="0",
+            description="Save guide images and temperature data when nonzero.",
+        ),
+        DeclareLaunchArgument(
+            "output_dir",
+            default_value="./capture",
+            description="Directory used when if_save is enabled.",
         ),
         Node(
             package="camera_capturer",
             executable="guidestereo_node",
-            name="camera_stereo_node",
+            name="guidestereo_node",
             output="screen",
             parameters=[{
                 "guide_query_ms": guide_query_ms,
+                "if_save": if_save,
+                "output_dir": output_dir,
             }],
         ),
         Node(
             package="rviz2",
             executable="rviz2",
-            name="camera_stereo_rviz",
+            name="guidestereo_rviz",
             arguments=["-d", rviz_config],
             condition=IfCondition(use_rviz),
             output="screen",

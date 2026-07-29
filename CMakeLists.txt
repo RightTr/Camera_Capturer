@@ -103,22 +103,26 @@ if(USE_ROS1)
         INCLUDE_DIRS
     )
 
-    add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
-    add_executable(guidestereo_sync_node
-        src/ros/guidestereo_sync_ros.cpp
+    add_executable(guidestereo_node
+        src/ros/guidestereo_ros.cpp
+        src/producer/guide_producer.cpp
+        src/writer/guide_writer.cpp)
+    add_executable(guidestereo_trigger_node
+        src/ros/guidestereo_trigger_ros.cpp
         src/producer/guide_producer.cpp
         src/writer/guide_writer.cpp)
     add_executable(realsense_node
         src/ros/realsense_ros.cpp
-        src/producer/realsense_producer.cpp)
+        src/producer/realsense_producer.cpp
+        src/writer/realsense_writer.cpp)
     add_executable(camera_RGBDT_node
         src/ros/camera_RGBDT_ros.cpp
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
         src/writer/realsense_writer.cpp)
-    add_executable(camera_RGBDT_sync_node
-        src/ros/camera_RGBDT_sync_ros.cpp
+    add_executable(rgbdt_trigger_node
+        src/ros/RGBDT_trigger_ros.cpp
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
@@ -128,7 +132,7 @@ if(USE_ROS1)
         pthread
         serial
         )
-    target_link_libraries(guidestereo_sync_node
+    target_link_libraries(guidestereo_trigger_node
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}
         pthread
@@ -138,7 +142,7 @@ if(USE_ROS1)
     target_include_directories(guidestereo_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
     )
-    target_include_directories(guidestereo_sync_node
+    target_include_directories(guidestereo_trigger_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(camera_RGBDT_node
@@ -148,7 +152,7 @@ if(USE_ROS1)
         serial
         realsense2::realsense2
     )
-    target_link_libraries(camera_RGBDT_sync_node
+    target_link_libraries(rgbdt_trigger_node
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}
         pthread
@@ -165,7 +169,7 @@ if(USE_ROS1)
     target_include_directories(camera_RGBDT_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
-    target_include_directories(camera_RGBDT_sync_node
+    target_include_directories(rgbdt_trigger_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
     target_include_directories(realsense_node
@@ -183,22 +187,26 @@ if(USE_ROS2)
     find_package(cv_bridge REQUIRED)
     find_package(fastrtps REQUIRED)
 
-    add_executable(guidestereo_node src/ros/guidestereo_ros.cpp src/producer/guide_producer.cpp)
-    add_executable(guidestereo_sync_node
-        src/ros/guidestereo_sync_ros.cpp
+    add_executable(guidestereo_node
+        src/ros/guidestereo_ros.cpp
+        src/producer/guide_producer.cpp
+        src/writer/guide_writer.cpp)
+    add_executable(guidestereo_trigger_node
+        src/ros/guidestereo_trigger_ros.cpp
         src/producer/guide_producer.cpp
         src/writer/guide_writer.cpp)
     add_executable(realsense_node
         src/ros/realsense_ros.cpp
-        src/producer/realsense_producer.cpp)
+        src/producer/realsense_producer.cpp
+        src/writer/realsense_writer.cpp)
     add_executable(camera_RGBDT_node
         src/ros/camera_RGBDT_ros.cpp
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
         src/writer/realsense_writer.cpp)
-    add_executable(camera_RGBDT_sync_node
-        src/ros/camera_RGBDT_sync_ros.cpp
+    add_executable(rgbdt_trigger_node
+        src/ros/RGBDT_trigger_ros.cpp
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
@@ -209,7 +217,7 @@ if(USE_ROS2)
         std_msgs
         cv_bridge
     )
-    ament_target_dependencies(guidestereo_sync_node
+    ament_target_dependencies(guidestereo_trigger_node
         rclcpp
         sensor_msgs
         std_msgs
@@ -220,7 +228,7 @@ if(USE_ROS2)
         sensor_msgs
         std_msgs
     )
-    ament_target_dependencies(camera_RGBDT_sync_node
+    ament_target_dependencies(rgbdt_trigger_node
         rclcpp
         sensor_msgs
         std_msgs
@@ -244,7 +252,7 @@ if(USE_ROS2)
         pthread
         serial
         )
-    target_link_libraries(guidestereo_sync_node
+    target_link_libraries(guidestereo_trigger_node
         ${OpenCV_LIBS}
         pthread
         serial
@@ -253,7 +261,7 @@ if(USE_ROS2)
     target_include_directories(guidestereo_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
     )
-    target_include_directories(guidestereo_sync_node
+    target_include_directories(guidestereo_trigger_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(camera_RGBDT_node
@@ -262,7 +270,7 @@ if(USE_ROS2)
         serial
         realsense2::realsense2
     )
-    target_link_libraries(camera_RGBDT_sync_node
+    target_link_libraries(rgbdt_trigger_node
         ${OpenCV_LIBS}
         pthread
         serial
@@ -277,13 +285,13 @@ if(USE_ROS2)
     target_include_directories(camera_RGBDT_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
-    target_include_directories(camera_RGBDT_sync_node
+    target_include_directories(rgbdt_trigger_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
     target_include_directories(realsense_node
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS}
     )
-    install(TARGETS guidestereo_node guidestereo_sync_node realsense_node camera_RGBDT_node camera_RGBDT_sync_node
+    install(TARGETS guidestereo_node guidestereo_trigger_node realsense_node camera_RGBDT_node rgbdt_trigger_node
         DESTINATION lib/${PROJECT_NAME})
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
         install(DIRECTORY launch

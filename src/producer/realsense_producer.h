@@ -14,10 +14,14 @@
 struct StampedRealSenseFrame {
     cv::Mat color_image;
     cv::Mat depth_image_raw;
-    long host_sec;
-    long host_nanosec;
-    long sensor_sec;
-    long sensor_microsec;
+    long color_host_sec;
+    long color_host_nanosec;
+    long color_sensor_sec;
+    long color_sensor_microsec;
+    long depth_host_sec;
+    long depth_host_nanosec;
+    long depth_sensor_sec;
+    long depth_sensor_microsec;
     std::int64_t trigger_unix_ns = 0;
 };
 
@@ -48,7 +52,7 @@ public:
     void set_imu_fps(int imu_fps);
     void set_align_enabled(bool align);
     void set_filter_enabled(bool filter);
-    void set_rgb_queue_size(int rgb_max);
+    void set_rgbd_queue_size(int rgbd_max);
     void set_imu_queue_size(int imu_max);
 
     void run();
@@ -69,7 +73,7 @@ private:
     int imu_fps_ = 200;
     bool align_ = true;
     bool filter_ = true;
-    int rgb_max_ = 30;
+    int rgbd_max_ = 30;
     int imu_max_ = 200;
     std::function<bool()> running_;
     std::function<void()> fail_;
@@ -80,7 +84,7 @@ private:
     mutable std::mutex imu_mutex_;
     std::condition_variable rgb_cv_;
     std::condition_variable imu_cv_;
-    std::queue<StampedRealSenseFrame> rgb_queue_;
+    std::queue<StampedRealSenseFrame> rgbd_queue_;
     std::queue<StampedImuFrame> imu_queue_;
     std::atomic<bool> stopped_{false};
 };
