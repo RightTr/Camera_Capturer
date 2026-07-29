@@ -328,6 +328,9 @@ void RealSenseProducer::run()
                 }
                 if (selected) {
                     motion_profiles.push_back(selected);
+                    std::cout << "[realsense] Selected "
+                              << (st == RS2_STREAM_ACCEL ? "accel" : "gyro")
+                              << " IMU profile @ " << selected.fps() << " Hz" << std::endl;
                 } else {
                     std::cerr << "[realsense] Requested "
                               << (st == RS2_STREAM_ACCEL ? "accel" : "gyro")
@@ -338,6 +341,8 @@ void RealSenseProducer::run()
 
             if (!motion_profiles.empty()) {
                 motion_sensor.open(motion_profiles);
+                std::cout << "[realsense] Starting IMU with " << motion_profiles.size()
+                          << " motion profile(s)" << std::endl;
                 motion_sensor.start([this](rs2::frame f) {
                     const rs2_stream st = f.get_profile().stream_type();
                     if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;

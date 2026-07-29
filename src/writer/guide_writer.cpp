@@ -39,9 +39,18 @@ bool GuideWriter::open()
     param_stream_.open(camera_dir + "/params.txt");
     focal_temp_stream_.open(camera_dir + "/focal_temperature.txt");
     if (!time_stream_.is_open() || !param_stream_.is_open() || !focal_temp_stream_.is_open()) {
+        std::cerr << "Failed to open guide output files under "
+                  << std::filesystem::absolute(camera_dir).string()
+                  << " (times=" << time_stream_.is_open()
+                  << ", params=" << param_stream_.is_open()
+                  << ", focal_temperature=" << focal_temp_stream_.is_open()
+                  << ")" << std::endl;
         return false;
     }
 
+    std::cout << "Guide " << camera_name_ << " output dir: "
+              << std::filesystem::absolute(camera_dir).string()
+              << " (save_images=" << save_images_ << ")" << std::endl;
     time_stream_ << "sensor_time,host_time\n";
     return true;
 }

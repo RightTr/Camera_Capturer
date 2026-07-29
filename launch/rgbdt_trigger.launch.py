@@ -13,6 +13,8 @@ def generate_launch_description():
     if_save_img = LaunchConfiguration("if_save_img")
     output_dir = LaunchConfiguration("output_dir")
     guide_query_ms = LaunchConfiguration("guide_query_ms")
+    imu_fps = LaunchConfiguration("imu_fps")
+    imu_queue_size = LaunchConfiguration("imu_queue_size")
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
     pwm_line = LaunchConfiguration("pwm_line")
@@ -47,6 +49,16 @@ def generate_launch_description():
             "guide_query_ms",
             default_value="100",
             description="Guide camera serial status query interval (ms).",
+        ),
+        DeclareLaunchArgument(
+            "imu_fps",
+            default_value="200",
+            description="RealSense accel and gyro frame rate.",
+        ),
+        DeclareLaunchArgument(
+            "imu_queue_size",
+            default_value="2000",
+            description="Internal IMU producer queue size.",
         ),
         DeclareLaunchArgument(
             "serial_port",
@@ -84,6 +96,8 @@ def generate_launch_description():
                 "if_save_img": if_save_img,
                 "output_dir": output_dir,
                 "guide_query_ms": guide_query_ms,
+                "imu_fps": imu_fps,
+                "imu_queue_size": imu_queue_size,
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
                 "pwm_line": pwm_line,

@@ -515,6 +515,8 @@ int main(int argc, char **argv)
     const int if_save_img = get_param<int>("if_save_img", 1);
     outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
+    const int imu_fps = get_param<int>("imu_fps", 200);
+    const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
@@ -535,13 +537,15 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d, serial_port %s, serial_baud %d, pwm_line %s, sync_queue_size %d\n",
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d, imu_fps %d, imu_queue_size %d, serial_port %s, serial_baud %d, pwm_line %s, sync_queue_size %d\n",
            trigger_fps,
            rs_sync_mode,
            if_save,
            if_save_img,
            outputdir.c_str(),
            guide_query_ms,
+           imu_fps,
+           imu_queue_size,
            serial_port.c_str(),
            serial_baud,
            pwm_line.c_str(),
@@ -592,8 +596,8 @@ int main(int argc, char **argv)
             if (if_save) rs_writer->write_depth_scale(scale);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
-    rs_prod->set_imu_fps(200);
-    rs_prod->set_imu_queue_size(400);
+    rs_prod->set_imu_fps(imu_fps);
+    rs_prod->set_imu_queue_size(imu_queue_size);
 
     std::vector<std::thread> producers;
     producers.emplace_back([]() { rs_prod->run(); });

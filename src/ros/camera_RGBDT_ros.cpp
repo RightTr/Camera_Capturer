@@ -331,6 +331,8 @@ int main(int argc, char **argv)
     const int if_save_img = get_param<int>("if_save_img", 1);
     outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
+    const int imu_fps = get_param<int>("imu_fps", 200);
+    const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
@@ -346,13 +348,15 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d\n",
+    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d, imu_fps %d, imu_queue_size %d\n",
            trigger_fps,
            rs_sync_mode,
            if_save,
            if_save_img,
            outputdir.c_str(),
-           guide_query_ms);
+           guide_query_ms,
+           imu_fps,
+           imu_queue_size);
 
     if (if_save && !open_writers(outputdir, if_save_img != 0)) {
         return EXIT_FAILURE;
@@ -399,8 +403,8 @@ int main(int argc, char **argv)
             if (if_save) rs_writer->write_depth_scale(scale);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
-    rs_prod->set_imu_fps(200);
-    rs_prod->set_imu_queue_size(400);
+    rs_prod->set_imu_fps(imu_fps);
+    rs_prod->set_imu_queue_size(imu_queue_size);
 
     std::vector<std::thread> producers;
     producers.emplace_back([]() { rs_prod->run(); });
