@@ -38,7 +38,7 @@ bool GuideWriter::open()
         return false;
     }
 
-    time_stream_ << "stamp_sec,host_sec\n";
+    time_stream_ << "sensor_time,host_time\n";
     return true;
 }
 
@@ -55,13 +55,13 @@ void GuideWriter::write(const GuideFrame& frame)
         return;
     }
 
+    const auto sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
+    const auto host_ns = to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
     const auto stamp_ns = frame.trigger_unix_ns != 0
         ? frame.trigger_unix_ns
-        : to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
-    const double host_sec =
-        static_cast<double>(frame.host_sec) + static_cast<double>(frame.host_nanosec) * 1e-9;
-    time_stream_ << std::fixed << std::setprecision(9) << static_cast<double>(stamp_ns) * 1e-9
-                 << "," << host_sec << std::endl;
+        : sensor_ns;
+    time_stream_ << format_timestamp_ns(sensor_ns) << ","
+                 << format_timestamp_ns(host_ns) << std::endl;
 
     param_stream_ << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
                   << "," << frame.param_data.humidity
