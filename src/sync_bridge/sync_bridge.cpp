@@ -299,10 +299,10 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
             trigger_event_queue_.pop_front();
         }
 
-        std::printf("PWM trigger matched on %s: output=%lld ns, capture=%lld ns\n",
+        std::printf("PWM trigger matched on %s: output=%s, capture=%s\n",
                     config_.pwm_line.c_str(),
-                    static_cast<long long>(output_ns),
-                    static_cast<long long>(capture_ns));
+                    format_timestamp_ns(output_ns).c_str(),
+                    format_timestamp_ns(capture_ns).c_str());
         cv_.notify_one();
     }
 }
@@ -429,10 +429,10 @@ void SyncBridge::gpio_loop()
                 trigger_event_queue_.pop_front();
             }
 
-            std::printf("PWM trigger matched on %s: output=%lld ns, capture=%lld ns\n",
+            std::printf("PWM trigger matched on %s: output=%s, capture=%s\n",
                         config_.pwm_line.c_str(),
-                        static_cast<long long>(output_ns),
-                        static_cast<long long>(capture_ns));
+                        format_timestamp_ns(output_ns).c_str(),
+                        format_timestamp_ns(capture_ns).c_str());
             cv_.notify_one();
         }
     }
