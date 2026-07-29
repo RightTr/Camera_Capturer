@@ -27,7 +27,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "rs_sync_mode",
-            default_value="0",
+            default_value="3",
             description="RealSense inter-cam sync mode. Set 0 to disable.",
         ),
         DeclareLaunchArgument(
@@ -67,12 +67,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "if_save",
-            default_value="0",
+            default_value="1",
             description="Save RealSense RGBD and IMU data when nonzero.",
         ),
         DeclareLaunchArgument(
             "output_dir",
-            default_value="/home/pi/Cap_ws",
+            default_value="./capture",
             description="Directory used when if_save is enabled.",
         ),
         DeclareLaunchArgument(

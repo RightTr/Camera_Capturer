@@ -29,7 +29,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "if_save",
-            default_value="0",
+            default_value="1",
             description="Save guide images and temperature data when nonzero.",
         ),
         DeclareLaunchArgument(
