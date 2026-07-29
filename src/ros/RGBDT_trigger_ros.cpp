@@ -354,20 +354,24 @@ void realsense_consumer()
         if (if_save) {
             {
                 std::lock_guard<std::mutex> lock(time_mutex);
+                const std::int64_t color_sensor_ns = to_ns_from_sec_usec(
+                    rs_frame.color_sensor_sec,
+                    rs_frame.color_sensor_microsec);
+                const std::int64_t color_host_ns = to_ns_from_sec_nsec(
+                    rs_frame.color_host_sec,
+                    rs_frame.color_host_nanosec);
+                const std::int64_t depth_sensor_ns = to_ns_from_sec_usec(
+                    rs_frame.depth_sensor_sec,
+                    rs_frame.depth_sensor_microsec);
+                const std::int64_t depth_host_ns = to_ns_from_sec_nsec(
+                    rs_frame.depth_host_sec,
+                    rs_frame.depth_host_nanosec);
                 rs_time_queue.push_back({
                     trigger_event.pwm_output_unix_ns,
-                    format_timestamp_sec_usec_as_nsec(
-                        rs_frame.color_sensor_sec,
-                        rs_frame.color_sensor_microsec),
-                    format_timestamp_sec_nsec(
-                        rs_frame.color_host_sec,
-                        rs_frame.color_host_nanosec),
-                    format_timestamp_sec_usec_as_nsec(
-                        rs_frame.depth_sensor_sec,
-                        rs_frame.depth_sensor_microsec),
-                    format_timestamp_sec_nsec(
-                        rs_frame.depth_host_sec,
-                        rs_frame.depth_host_nanosec),
+                    format_timestamp_ns(color_sensor_ns),
+                    format_timestamp_ns(color_host_ns),
+                    format_timestamp_ns(depth_sensor_ns),
+                    format_timestamp_ns(depth_host_ns),
                 });
                 write_times();
             }
