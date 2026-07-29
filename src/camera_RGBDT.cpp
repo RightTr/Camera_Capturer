@@ -93,7 +93,7 @@ void realsense_consumer() {
 void imu_consumer() {
     for (;;) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu(frame)) break;
+        if (!rs_prod->pop_imu_csv(frame)) break;
         if (!output_enabled()) continue;
         if (if_save) rs_writer->write_imu(frame);
     }
@@ -201,6 +201,7 @@ int main(int argc, char **argv) {
             if (if_save) rs_writer->write_depth_scale(scale);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
+    rs_prod->set_imu_csv_enabled(if_save != 0);
 
     if (!GuideProducer::start_capture_pair(guides)) {
         return EXIT_FAILURE;

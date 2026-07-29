@@ -289,7 +289,7 @@ void imu_consumer()
 {
     for (;;) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu(frame)) {
+        if (!rs_prod->pop_imu_pub(frame)) {
             std::cerr << "[realsense] IMU consumer stopped" << std::endl;
             break;
         }
@@ -315,8 +315,15 @@ void imu_consumer()
                 frame.y,
                 frame.z);
         }
+    }
+}
 
-        if (if_save) rs_writer->write_imu(frame);
+void imu_writer()
+{
+    for (;;) {
+        StampedImuFrame frame;
+        if (!rs_prod->pop_imu_csv(frame)) break;
+        rs_writer->write_imu(frame);
     }
 }
 
@@ -407,6 +414,7 @@ int main(int argc, char **argv)
         });
     rs_prod->set_sync_mode(rs_sync_mode);
     rs_prod->set_imu_fps(imu_fps);
+    rs_prod->set_imu_csv_enabled(if_save != 0);
     rs_prod->set_imu_queue_size(imu_queue_size);
 
     std::vector<std::thread> producers;
@@ -421,6 +429,9 @@ int main(int argc, char **argv)
     std::vector<std::thread> consumers;
     consumers.emplace_back(realsense_consumer);
     consumers.emplace_back(imu_consumer);
+    if (if_save) {
+        consumers.emplace_back(imu_writer);
+    }
 
     if (!GuideProducer::start_capture_pair(guides)) {
         quitFlag.store(true);

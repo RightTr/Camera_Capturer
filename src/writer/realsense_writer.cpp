@@ -52,22 +52,11 @@ bool RealSenseWriter::open()
     time_stream_ << "color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
     accel_stream_ << "host_time,sensor_time,ax,ay,az\n";
     gyro_stream_ << "host_time,sensor_time,gx,gy,gz\n";
-    imu_stop_ = false;
-    imu_thread_ = std::thread(&RealSenseWriter::imu_loop, this);
     return true;
 }
 
 void RealSenseWriter::close()
 {
-    {
-        std::lock_guard<std::mutex> lock(imu_mutex_);
-        imu_stop_ = true;
-    }
-    imu_cv_.notify_all();
-    if (imu_thread_.joinable()) {
-        imu_thread_.join();
-    }
-
     if (time_stream_.is_open()) time_stream_.close();
     if (accel_stream_.is_open()) accel_stream_.close();
     if (gyro_stream_.is_open()) gyro_stream_.close();
@@ -117,49 +106,20 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
 
 void RealSenseWriter::write_imu(const StampedImuFrame& frame)
 {
-    {
-        std::lock_guard<std::mutex> lock(imu_mutex_);
-        if (imu_stop_) {
-            return;
-        }
-        imu_queue_.push_back(frame);
+    std::ostream* out = nullptr;
+    if (frame.stream_type == RS2_STREAM_ACCEL) {
+        out = &accel_stream_;
+    } else if (frame.stream_type == RS2_STREAM_GYRO) {
+        out = &gyro_stream_;
     }
-    imu_cv_.notify_one();
-}
-
-void RealSenseWriter::imu_loop()
-{
-    for (;;) {
-        StampedImuFrame frame;
-        {
-            std::unique_lock<std::mutex> lock(imu_mutex_);
-            imu_cv_.wait(lock, [&] {
-                return imu_stop_ || !imu_queue_.empty();
-            });
-            if (imu_queue_.empty()) {
-                if (imu_stop_) {
-                    break;
-                }
-                continue;
-            }
-            frame = imu_queue_.front();
-            imu_queue_.pop_front();
-        }
-        std::ostream* out = nullptr;
-        if (frame.stream_type == RS2_STREAM_ACCEL) {
-            out = &accel_stream_;
-        } else if (frame.stream_type == RS2_STREAM_GYRO) {
-            out = &gyro_stream_;
-        }
-        if (!out || !out->good()) {
-            continue;
-        }
-
-        (*out) << format_timestamp_ns(frame.host_ns) << ","
-               << format_timestamp_ns(frame.sensor_ns) << ","
-               << std::fixed << std::setprecision(6)
-               << frame.x << "," << frame.y << "," << frame.z << "\n";
+    if (!out || !out->good()) {
+        return;
     }
+
+    (*out) << format_timestamp_ns(frame.host_ns) << ","
+           << format_timestamp_ns(frame.sensor_ns) << ","
+           << std::fixed << std::setprecision(6)
+           << frame.x << "," << frame.y << "," << frame.z << "\n";
 }
 
 void RealSenseWriter::write_intrinsics(const rs2::pipeline_profile& profile)

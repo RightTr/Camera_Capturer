@@ -66,7 +66,7 @@ void imu_consumer()
 {
     while (!quitFlag.load()) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu(frame)) {
+        if (!rs_prod->pop_imu_pub(frame)) {
             std::cerr << "[realsense] IMU consumer stopped" << std::endl;
             break;
         }
@@ -88,10 +88,15 @@ void imu_consumer()
                 frame.y,
                 frame.z);
         }
+    }
+}
 
-        if (if_save) {
-            rs_writer->write_imu(frame);
-        }
+void imu_writer()
+{
+    while (!quitFlag.load()) {
+        StampedImuFrame frame;
+        if (!rs_prod->pop_imu_csv(frame)) break;
+        rs_writer->write_imu(frame);
     }
 }
 
@@ -154,6 +159,7 @@ int main(int argc, char **argv)
     rs_prod->set_camera_fps(fps);
     rs_prod->set_imu_enabled(enable_imu);
     rs_prod->set_imu_fps(imu_fps);
+    rs_prod->set_imu_csv_enabled(if_save != 0);
     rs_prod->set_align_enabled(enable_align);
     rs_prod->set_filter_enabled(enable_filter);
     rs_prod->set_rgbd_queue_size(rgbd_queue_size);
@@ -180,6 +186,9 @@ int main(int argc, char **argv)
     threads.emplace_back(realsense_consumer);
     if (enable_imu) {
         threads.emplace_back(imu_consumer);
+        if (if_save) {
+            threads.emplace_back(imu_writer);
+        }
     }
 
     Rate rate(100.0);

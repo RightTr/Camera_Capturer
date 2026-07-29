@@ -50,6 +50,7 @@ public:
     void set_camera_fps(int camera_fps);
     void set_imu_enabled(bool imu);
     void set_imu_fps(int imu_fps);
+    void set_imu_csv_enabled(bool enabled);
     void set_align_enabled(bool align);
     void set_filter_enabled(bool filter);
     void set_rgbd_queue_size(int rgbd_max);
@@ -57,7 +58,8 @@ public:
 
     void run();
     bool pop_rgbd(StampedRealSenseFrame& frame);
-    bool pop_imu(StampedImuFrame& frame);
+    bool pop_imu_pub(StampedImuFrame& frame);
+    bool pop_imu_csv(StampedImuFrame& frame);
     void stop();
 
 private:
@@ -70,6 +72,7 @@ private:
     int sync_mode_ = 0;
     int camera_fps_ = 30;
     bool imu_ = true;
+    bool imu_csv_ = false;
     int imu_fps_ = 200;
     bool align_ = true;
     bool filter_ = true;
@@ -84,7 +87,9 @@ private:
     mutable std::mutex imu_mutex_;
     std::condition_variable rgb_cv_;
     std::condition_variable imu_cv_;
+    std::condition_variable imu_save_cv_;
     std::queue<StampedRealSenseFrame> rgbd_queue_;
     std::queue<StampedImuFrame> imu_queue_;
+    std::queue<StampedImuFrame> imu_save_queue_;
     std::atomic<bool> stopped_{false};
 };
