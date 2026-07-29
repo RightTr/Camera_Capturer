@@ -203,8 +203,7 @@ bool RealSenseProducer::push_imu(StampedImuFrame&& frame)
 {
     std::unique_lock<std::mutex> lock(imu_mutex_);
     imu_cv_.wait(lock, [&] {
-        return (imu_queue_.size() < static_cast<size_t>(imu_max_) &&
-                (!imu_csv_ || imu_save_queue_.size() < static_cast<size_t>(imu_max_))) || !live();
+        return imu_queue_.size() < static_cast<size_t>(imu_max_) || !live();
     });
     if (!live()) {
         return false;
