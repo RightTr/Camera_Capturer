@@ -133,7 +133,7 @@ cd Camera_Capturer
 * Guide Mono
 
 ```bash
-./build/guidemono <camera_id> <max_fps> (<if_save>) (<output_dir>) (<serial_port_id>)
+./build/guidemono <camera_id> <max_fps> (<if_save>) (<output_dir>) (<serial_port_id>) (<guide_query_ms>)
 ```
 
 * Guide Stereo
@@ -141,7 +141,7 @@ cd Camera_Capturer
 Please follow the instuctions above to check video streams and serial devices of camera heads, and modify the source code accordingly.
 
 ```bash
-./build/guidestereo (<if_save>) (<tempIncre_detect>) (<output_dir>)
+./build/guidestereo (<if_save>) (<tempIncre_detect>) (<output_dir>) (<guide_query_ms>)
 ```
 
 Supports external trigger input (1.8 voltage 30Hz 50% duty-cycle PWM) which must be provided before enabling synchronization mode.
@@ -158,7 +158,7 @@ Port 1 Sync on
 * RGBDT Capturer with Guide Stereo and RealSense Camera
 
 ```bash
-./build/camera_RGBDT (<realsense_sync>) (<if_save>) (<tempIncre_detect>) (<output_dir>)
+./build/camera_RGBDT (<realsense_sync>) (<if_save>) (<tempIncre_detect>) (<output_dir>) (<guide_query_ms>)
 ```
 
 Following the instructions above to turn on Guide Stereo external trigger synchronization.

@@ -89,9 +89,10 @@ int main(int argc, char **argv) {
     signal(SIGTERM, signal_handler);
 
     int trigger_fps = 30;
+    int guide_query_ms = 100;
     outputdir = "./capture";
 
-    std::cout << "Usage: " << argv[0] << " (<if_save>) (<tempIncre_detect>) (<output_dir>)" << std::endl;
+    std::cout << "Usage: " << argv[0] << " (<if_save>) (<tempIncre_detect>) (<output_dir>) (<guide_query_ms>)" << std::endl;
     if (argc == 2) {
         if_save = atoi(argv[1]);
     }
@@ -104,7 +105,16 @@ int main(int argc, char **argv) {
         tempIncre_detect = atoi(argv[2]);
         outputdir = argv[3];
     }
-    printf("trigger_fps %d, outputdir %s\n", trigger_fps, outputdir.c_str());
+    else if (argc == 5){
+        if_save = atoi(argv[1]);
+        tempIncre_detect = atoi(argv[2]);
+        outputdir = argv[3];
+        guide_query_ms = atoi(argv[4]);
+    }
+    printf("trigger_fps %d, outputdir %s, guide_query_ms %d\n",
+           trigger_fps,
+           outputdir.c_str(),
+           guide_query_ms);
 
     if (if_save && !open_writers(outputdir)) return EXIT_FAILURE;
 
@@ -126,6 +136,7 @@ int main(int argc, char **argv) {
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(false);
+        guide->set_serial_query_time(guide_query_ms);
     }
 
     if (!GuideProducer::start_serial_pair(

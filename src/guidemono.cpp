@@ -40,6 +40,7 @@ int main(int argc, char** argv)
     int maxfps = 25;
     int portid = 0;
     int if_save = 0;
+    int guide_query_ms = 100;
     std::string outputdir = "./";
 
     if (argc == 3) {
@@ -56,10 +57,17 @@ int main(int argc, char** argv)
         if_save = std::atoi(argv[3]);
         outputdir = argv[4];
         portid = std::atoi(argv[5]);
+    } else if (argc == 7) {
+        video_id = std::atoi(argv[1]);
+        maxfps = std::atoi(argv[2]);
+        if_save = std::atoi(argv[3]);
+        outputdir = argv[4];
+        portid = std::atoi(argv[5]);
+        guide_query_ms = std::atoi(argv[6]);
     } else {
         std::cerr << "Usage: " << argv[0]
-                  << " <camera_id> <max_fps> (<if_save>) (<output_dir>) (<serial_port_id>)" << std::endl;
-        std::cout << "e.g., " << argv[0] << " 2 25 1 ./output 0" << std::endl;
+                  << " <camera_id> <max_fps> (<if_save>) (<output_dir>) (<serial_port_id>) (<guide_query_ms>)" << std::endl;
+        std::cout << "e.g., " << argv[0] << " 2 25 1 ./output 0 100" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -89,6 +97,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
     producer->set_tenfold_celsius(false);
+    producer->set_serial_query_time(guide_query_ms);
 
     if (producer->start_serial(writer ? writer->temp_stream() : nullptr) < 0) {
         return EXIT_FAILURE;

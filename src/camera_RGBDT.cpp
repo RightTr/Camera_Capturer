@@ -132,12 +132,13 @@ int main(int argc, char **argv) {
     signal(SIGTERM, signal_handler);
 
     int trigger_fps = 30;
+    int guide_query_ms = 100;
     outputdir = "/data/home/pi/Cap";
 
     std::cout << "Usage: " << argv[0]
-              << " <rs_sync_mode> [if_save] [output_dir]"
+              << " <rs_sync_mode> [if_save] [output_dir] [guide_query_ms]"
               << "\n   or: " << argv[0]
-              << " <rs_sync_mode> <if_save> <tempIncre_detect> <output_dir>"
+              << " <rs_sync_mode> <if_save> <tempIncre_detect> <output_dir> [guide_query_ms]"
               << std::endl;
     if (argc == 2) {
         rs_sync_mode = atoi(argv[1]);
@@ -153,8 +154,17 @@ int main(int argc, char **argv) {
         if_save = atoi(argv[2]);
         tempIncre_detect = atoi(argv[3]);
         outputdir = argv[4];
+    } else if (argc == 6) {
+        rs_sync_mode = atoi(argv[1]);
+        if_save = atoi(argv[2]);
+        tempIncre_detect = atoi(argv[3]);
+        outputdir = argv[4];
+        guide_query_ms = atoi(argv[5]);
     }
-    printf("trigger_fps %d, outputdir %s\n", trigger_fps, outputdir.c_str());
+    printf("trigger_fps %d, outputdir %s, guide_query_ms %d\n",
+           trigger_fps,
+           outputdir.c_str(),
+           guide_query_ms);
 
     if (if_save && !open_writers(outputdir)) return EXIT_FAILURE;
 
@@ -173,6 +183,7 @@ int main(int argc, char **argv) {
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(false);
+        guide->set_serial_query_time(guide_query_ms);
     }
 
     if (!GuideProducer::start_serial_pair(
