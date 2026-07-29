@@ -156,7 +156,7 @@ ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::chrono::steady_clock::time_point g_output_start_at;
-constexpr std::int64_t kFramePeriodNs = 33333333LL;
+constexpr std::int64_t kFramePeriodNs = 30000000LL;
 
 bool output_enabled()
 {

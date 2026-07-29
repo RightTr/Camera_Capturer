@@ -35,7 +35,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "if_save_img",
-            default_value="1",
+            default_value="0",
             description="Save left/right/RGBD image PNG files when if_save is enabled.",
         ),
         DeclareLaunchArgument(
