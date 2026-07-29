@@ -165,7 +165,7 @@ void write_times(bool flush = false)
 {
     while (!guide_time_queue.empty() || !rs_time_queue.empty()) {
         if (guide_time_queue.empty()) {
-            if (!flush && rs_time_queue.size() < 2) return;
+            if (!flush) return;
             const RealSenseTimes rs_times = rs_time_queue.front();
             rs_time_queue.pop_front();
             time_stream << ",,,,"
@@ -176,7 +176,7 @@ void write_times(bool flush = false)
             continue;
         }
         if (rs_time_queue.empty()) {
-            if (!flush && guide_time_queue.size() < 2) return;
+            if (!flush) return;
             const GuideTimes guide_times = guide_time_queue.front();
             guide_time_queue.pop_front();
             time_stream << guide_times.pwm_output_time << ","
