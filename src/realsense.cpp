@@ -84,9 +84,8 @@ int main(int argc, char** argv) {
 
         if (csv.is_open()) {
             std::lock_guard<std::mutex> lock(csv_mutex);
-            csv << std::fixed << std::setprecision(9)
-                << to_sec_from_ns(host_ns) << ","
-                << to_sec_from_ns(sensor_ns) << ","
+            csv << format_timestamp_ns(static_cast<int64_t>(host_ns)) << ","
+                << format_timestamp_ns(static_cast<int64_t>(sensor_ns)) << ","
                 << (st == RS2_STREAM_ACCEL ? "accel" : "gyro") << ","
                 << std::fixed << std::setprecision(6)
                 << d.x << "," << d.y << "," << d.z << "\n";
