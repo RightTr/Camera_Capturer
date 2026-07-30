@@ -220,3 +220,67 @@ The first 10 seconds after startup are treated as a warm-up period. Frames are c
 ```bash
 ros2 launch camera_capturer realsense.launch.py
 ```
+
+## 4. Output
+
+When `if_save=1`, data is written under `output_dir`. Image folders are written only when `if_save_img=1`; CSV and text metadata are still saved when `if_save_img=0`.
+
+```text
+output_dir/
+├── times.csv
+├── left/
+│   ├── times.csv
+│   ├── params.txt
+│   ├── focal_temperature.txt
+│   ├── image/
+│   │   └── <timestamp>.png
+│   └── temperature/
+│       └── <timestamp>.png
+├── right/
+│   ├── times.csv
+│   ├── params.txt
+│   ├── focal_temperature.txt
+│   ├── image/
+│   │   └── <timestamp>.png
+│   └── temperature/
+│       └── <timestamp>.png
+└── realsense/
+    ├── times.csv
+    ├── realsense_intrinsics.txt
+    ├── depth_scale.txt
+    ├── rgb/
+    │   └── <timestamp>.png
+    ├── depth_raw/
+    │   └── <timestamp>.png
+    └── imu/
+        ├── accel.csv
+        └── gyro.csv
+```
+
+`times.csv` in the top-level `output_dir` is produced by `rgbdt_trigger_node`. It records one aligned row per trigger cycle:
+
+```text
+pwm_output_time,pwm_capture_time,left_host_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time
+```
+
+If one camera drops a frame, the corresponding fields are left empty so later rows do not shift out of alignment.
+
+`left/` and `right/` contain Guide stereo output:
+
+- `times.csv`: `sensor_time,host_time`.
+- `params.txt`: Guide frame parameters, starting with host timestamp, then humidity, distance, emissivity, reflected temperature, shutter flag, hot/cold/mark points, and region average temperature.
+- `focal_temperature.txt`: periodic Guide focal temperature query result.
+- `image/<timestamp>.png`: Guide image.
+- `temperature/<timestamp>.png`: Guide temperature image.
+
+`realsense/` contains RealSense RGBD and IMU output:
+
+- `times.csv`: `color_sensor_time,color_host_time,depth_sensor_time,depth_host_time`.
+- `realsense_intrinsics.txt`: saved RealSense RGB/depth camera intrinsics.
+- `depth_scale.txt`: RealSense depth scale.
+- `rgb/<timestamp>.png`: RealSense color image.
+- `depth_raw/<timestamp>.png`: RealSense raw depth image.
+- `imu/accel.csv`: accelerometer samples as `host_time,sensor_time,x,y,z`.
+- `imu/gyro.csv`: gyroscope samples as `host_time,sensor_time,x,y,z`.
+
+In trigger mode, Guide and RealSense image filenames use the PWM output time. In non-trigger mode, image filenames use the camera sensor time. All saved timestamps use `sec.nsec` format with 9 digits after the decimal point.

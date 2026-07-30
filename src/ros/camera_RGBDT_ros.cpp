@@ -343,6 +343,7 @@ int main(int argc, char **argv)
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
+    const int warmup_sec = get_param<int>("warmup_sec", 10);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
@@ -358,15 +359,6 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d, imu_fps %d, imu_queue_size %d\n",
-           trigger_fps,
-           rs_sync_mode,
-           if_save,
-           if_save_img,
-           outputdir.c_str(),
-           guide_query_ms,
-           imu_fps,
-           imu_queue_size);
 
     if (if_save && !open_writers(outputdir, if_save_img != 0)) {
         return EXIT_FAILURE;
@@ -424,7 +416,7 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup_sec));
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(realsense_consumer);

@@ -156,7 +156,7 @@ ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::chrono::steady_clock::time_point g_output_start_at;
-constexpr std::int64_t kFramePeriodNs = 30000000LL;
+std::int64_t frame_period_ns = 30000000LL;
 
 bool output_enabled()
 {
@@ -224,10 +224,10 @@ int missed_count(std::int64_t last_host_ns, std::int64_t current_host_ns)
         return 0;
     }
     const std::int64_t gap_ns = current_host_ns - last_host_ns;
-    if (gap_ns <= kFramePeriodNs + kFramePeriodNs / 2) {
+    if (gap_ns <= frame_period_ns + frame_period_ns / 2) {
         return 0;
     }
-    return static_cast<int>((gap_ns + kFramePeriodNs / 2) / kFramePeriodNs - 1);
+    return static_cast<int>((gap_ns + frame_period_ns / 2) / frame_period_ns - 1);
 }
 
 void blank_guide(const TriggerEvent& trigger_event)
@@ -527,6 +527,8 @@ int main(int argc, char **argv)
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
+    const int warmup_sec = get_param<int>("warmup_sec", 10);
+    frame_period_ns = get_param<std::int64_t>("frame_period_ns", 30000000LL);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
@@ -547,19 +549,6 @@ int main(int argc, char **argv)
                 if (guides[i]) guides[i]->send_serial_command(msg->data ? GuideProducer::SerialCmd::SYNC_ON : GuideProducer::SerialCmd::SYNC_OFF);
             }
         });
-    printf("trigger_fps %d, rs_sync_mode %d, if_save %d, if_save_img %d, outputdir %s, guide_query_ms %d, imu_fps %d, imu_queue_size %d, serial_port %s, serial_baud %d, pwm_line %s, sync_queue_size %d\n",
-           trigger_fps,
-           rs_sync_mode,
-           if_save,
-           if_save_img,
-           outputdir.c_str(),
-           guide_query_ms,
-           imu_fps,
-           imu_queue_size,
-           serial_port.c_str(),
-           serial_baud,
-           pwm_line.c_str(),
-           sync_queue_size);
 
     if (if_save && !open_writers(outputdir, if_save_img != 0)) {
         return EXIT_FAILURE;
@@ -633,7 +622,7 @@ int main(int argc, char **argv)
         static_cast<std::size_t>(std::max(1, sync_queue_size)));
     pwm_stamps->start();
 
-    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup_sec));
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(realsense_consumer);
