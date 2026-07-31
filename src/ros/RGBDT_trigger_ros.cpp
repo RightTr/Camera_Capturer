@@ -39,8 +39,8 @@ std::ofstream time_stream;
 
 struct GuideTimes {
     std::int64_t pwm_output_unix_ns;
-    std::string pwm_output_time;
-    std::string pwm_capture_time;
+    std::string trigger_output_time;
+    std::string trigger_capture_time;
     std::string left_sensor_time;
     std::string left_host_time;
     std::string right_sensor_time;
@@ -63,9 +63,9 @@ std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
 std::unique_ptr<SyncBridge> sync_bridge;
 
-class PwmStampDistributor {
+class TriggerStampDistributor {
 public:
-    explicit PwmStampDistributor(SyncBridge& bridge, std::size_t max_queue_size)
+    explicit TriggerStampDistributor(SyncBridge& bridge, std::size_t max_queue_size)
         : bridge_(bridge),
           max_queue_size_(std::max<std::size_t>(1, max_queue_size))
     {
@@ -149,7 +149,7 @@ private:
     std::thread worker_;
 };
 
-std::unique_ptr<PwmStampDistributor> pwm_stamps;
+std::unique_ptr<TriggerStampDistributor> trigger_stamps;
 
 std::array<ImagePublisher, 2> g_guide_image_pubs;
 std::array<ImagePublisher, 2> g_guide_temp_pubs;
@@ -182,8 +182,8 @@ void write_times(bool flush = false)
             if (!flush) return;
             const GuideTimes guide_times = guide_time_queue.front();
             guide_time_queue.pop_front();
-            time_stream << guide_times.pwm_output_time << ","
-                        << guide_times.pwm_capture_time << ","
+            time_stream << guide_times.trigger_output_time << ","
+                        << guide_times.trigger_capture_time << ","
                         << guide_times.left_sensor_time << ","
                         << guide_times.left_host_time << ","
                         << guide_times.right_sensor_time << ","
@@ -196,8 +196,8 @@ void write_times(bool flush = false)
         if (guide_times.pwm_output_unix_ns == rs_times.pwm_output_unix_ns) {
             guide_time_queue.pop_front();
             rs_time_queue.pop_front();
-            time_stream << guide_times.pwm_output_time << ","
-                        << guide_times.pwm_capture_time << ","
+            time_stream << guide_times.trigger_output_time << ","
+                        << guide_times.trigger_capture_time << ","
                         << guide_times.left_sensor_time << ","
                         << guide_times.left_host_time << ","
                         << guide_times.right_sensor_time << ","
@@ -208,8 +208,8 @@ void write_times(bool flush = false)
                         << rs_times.depth_host_time << "\n";
         } else if (guide_times.pwm_output_unix_ns < rs_times.pwm_output_unix_ns) {
             guide_time_queue.pop_front();
-            time_stream << guide_times.pwm_output_time << ","
-                        << guide_times.pwm_capture_time << ","
+            time_stream << guide_times.trigger_output_time << ","
+                        << guide_times.trigger_capture_time << ","
                         << guide_times.left_sensor_time << ","
                         << guide_times.left_host_time << ","
                         << guide_times.right_sensor_time << ","
@@ -241,7 +241,7 @@ bool open_writers(const std::string& base_dir, bool save_images)
     if (!time_stream.is_open()) {
         return false;
     }
-    time_stream << "pwm_output_time,pwm_capture_time,left_sensor_time,left_host_time,right_sensor_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
+    time_stream << "trigger_output_time,trigger_capture_time,left_sensor_time,left_host_time,right_sensor_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
 
     rs_writer = std::make_unique<RealSenseWriter>(base_dir, save_images);
     if (!rs_writer->open()) {
@@ -261,8 +261,8 @@ void signal_handler(int)
             guides[i]->stop();
         }
     }
-    if (pwm_stamps) {
-        pwm_stamps->stop();
+    if (trigger_stamps) {
+        trigger_stamps->stop();
     }
     if (sync_bridge) {
         sync_bridge->stop();
@@ -280,8 +280,8 @@ void stop_capture()
             guides[i]->stop();
         }
     }
-    if (pwm_stamps) {
-        pwm_stamps->stop();
+    if (trigger_stamps) {
+        trigger_stamps->stop();
     }
     if (sync_bridge) {
         sync_bridge->stop();
@@ -305,13 +305,13 @@ void stereo_consumer()
         if (!guides[1]->pop(right_frame)) break;
 
         if (!output_enabled()) {
-            if (pwm_stamps) {
-                pwm_stamps->take_guide_event();
+            if (trigger_stamps) {
+                trigger_stamps->take_guide_event();
             }
             continue;
         }
 
-        const TriggerEvent trigger_event = pwm_stamps->take_guide_event();
+        const TriggerEvent trigger_event = trigger_stamps->take_guide_event();
         if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
@@ -356,13 +356,13 @@ void realsense_consumer()
         if (!rs_prod->pop_rgbd(rs_frame)) break;
 
         if (!output_enabled()) {
-            if (pwm_stamps) {
-                pwm_stamps->take_realsense_event();
+            if (trigger_stamps) {
+                trigger_stamps->take_realsense_event();
             }
             continue;
         }
 
-        const TriggerEvent trigger_event = pwm_stamps->take_realsense_event();
+        const TriggerEvent trigger_event = trigger_stamps->take_realsense_event();
         if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
@@ -467,7 +467,7 @@ int main(int argc, char **argv)
     const int warmup_sec = get_param<int>("warmup_sec", 10);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
-    const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");
+    const std::string trigger_line = get_param<std::string>("trigger_line", "PAA.00");
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
 
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
@@ -545,7 +545,7 @@ int main(int argc, char **argv)
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;
     sync_config.serial_baud = serial_baud;
-    sync_config.pwm_line = pwm_line;
+    sync_config.pwm_line = trigger_line;
     sync_config.max_queue_size = static_cast<std::size_t>(std::max(1, sync_queue_size));
     sync_bridge = std::make_unique<SyncBridge>(sync_config);
     if (!sync_bridge->start()) {
@@ -553,10 +553,10 @@ int main(int argc, char **argv)
         if (rs_prod) rs_prod->stop();
         return EXIT_FAILURE;
     }
-    pwm_stamps = std::make_unique<PwmStampDistributor>(
+    trigger_stamps = std::make_unique<TriggerStampDistributor>(
         *sync_bridge,
         static_cast<std::size_t>(std::max(1, sync_queue_size)));
-    pwm_stamps->start();
+    trigger_stamps->start();
 
     g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup_sec));
 
@@ -570,7 +570,7 @@ int main(int argc, char **argv)
     if (!GuideProducer::start_capture_pair(guides)) {
         quitFlag.store(true);
         if (rs_prod) rs_prod->stop();
-        if (pwm_stamps) pwm_stamps->stop();
+        if (trigger_stamps) trigger_stamps->stop();
         if (sync_bridge) sync_bridge->stop();
         for (auto& t : consumers) {
             if (t.joinable()) t.join();
@@ -592,7 +592,7 @@ int main(int argc, char **argv)
 
     quitFlag.store(true);
     if (rs_prod) rs_prod->stop();
-    if (pwm_stamps) pwm_stamps->stop();
+    if (trigger_stamps) trigger_stamps->stop();
     if (sync_bridge) sync_bridge->stop();
     for (int i = 0; i < 2; ++i) {
         if (guides[i]) {

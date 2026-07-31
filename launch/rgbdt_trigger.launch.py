@@ -19,7 +19,7 @@ def generate_launch_description():
     frame_period_ns = LaunchConfiguration("frame_period_ns")
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
-    pwm_line = LaunchConfiguration("pwm_line")
+    trigger_line = LaunchConfiguration("trigger_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
@@ -83,9 +83,9 @@ def generate_launch_description():
             description="Baud rate for the board timestamp serial port.",
         ),
         DeclareLaunchArgument(
-            "pwm_line",
+            "trigger_line",
             default_value="PAA.00",
-            description="GPIO line on the Orin that receives the PWM sync signal.",
+            description="GPIO line on the Orin that receives the trigger sync signal.",
         ),
         DeclareLaunchArgument(
             "sync_queue_size",
@@ -114,7 +114,7 @@ def generate_launch_description():
                 "frame_period_ns": frame_period_ns,
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
-                "pwm_line": pwm_line,
+                "trigger_line": trigger_line,
                 "sync_queue_size": sync_queue_size,
             }],
         ),

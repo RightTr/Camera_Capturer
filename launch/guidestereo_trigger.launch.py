@@ -12,7 +12,7 @@ def generate_launch_description():
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
-    pwm_line = LaunchConfiguration("pwm_line")
+    trigger_line = LaunchConfiguration("trigger_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     if_save = LaunchConfiguration("if_save")
     if_save_img = LaunchConfiguration("if_save_img")
@@ -43,9 +43,9 @@ def generate_launch_description():
             description="Baud rate for the board timestamp serial port.",
         ),
         DeclareLaunchArgument(
-            "pwm_line",
+            "trigger_line",
             default_value="PAA.00",
-            description="GPIO line on the Orin that receives the PWM sync signal.",
+            description="GPIO line on the Orin that receives the trigger sync signal.",
         ),
         DeclareLaunchArgument(
             "sync_queue_size",
@@ -76,7 +76,7 @@ def generate_launch_description():
                 "guide_query_ms": guide_query_ms,
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
-                "pwm_line": pwm_line,
+                "trigger_line": trigger_line,
                 "sync_queue_size": sync_queue_size,
                 "if_save": if_save,
                 "if_save_img": if_save_img,
