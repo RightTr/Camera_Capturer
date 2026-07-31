@@ -3,11 +3,34 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <thread>
 #include <utility>
+
+namespace {
+
+struct CachedColorFrame {
+    cv::Mat image;
+    uint64_t frame_number;
+    long host_sec;
+    long host_nanosec;
+    long sensor_sec;
+    long sensor_usec;
+};
+
+struct CachedDepthFrame {
+    cv::Mat image;
+    uint64_t frame_number;
+    long host_sec;
+    long host_nanosec;
+    long sensor_sec;
+    long sensor_usec;
+};
+
+}  // namespace
 
 bool RealSenseProducer::configure_sync(rs2::depth_sensor& depth_sensor, int sync_mode)
 {
@@ -397,6 +420,14 @@ void RealSenseProducer::run()
     }
 
     rs2::frame_queue frame_queue(std::max(rgbd_max_ * 2, 60));
+    std::deque<CachedColorFrame> color_queue;
+    std::deque<CachedDepthFrame> depth_queue;
+    std::uint64_t last_color_frame_number = 0;
+    std::uint64_t last_depth_frame_number = 0;
+    bool has_color_base = false;
+    bool has_depth_base = false;
+    std::uint64_t color_base_frame_number = 0;
+    std::uint64_t depth_base_frame_number = 0;
 
     try {
         rs2::pipeline_profile profile = pipeline.start(cfg, [&](const rs2::frame& frame) {
@@ -456,6 +487,20 @@ void RealSenseProducer::run()
         rs2::depth_frame depth_f = out.get_depth_frame();
         if (!color_f || !depth_f) continue;
 
+        const int w = color_f.get_width();
+        const int h = color_f.get_height();
+        const auto color_host_now = std::chrono::system_clock::now();
+        const auto color_host_s = std::chrono::duration_cast<std::chrono::seconds>(color_host_now.time_since_epoch());
+        const long color_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            color_host_now.time_since_epoch() - color_host_s).count();
+        cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
+
+        const auto depth_host_now = std::chrono::system_clock::now();
+        const auto depth_host_s = std::chrono::duration_cast<std::chrono::seconds>(depth_host_now.time_since_epoch());
+        const long depth_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            depth_host_now.time_since_epoch() - depth_host_s).count();
+        cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
+
         if (filter_) {
             depth_f = spatial_filter.process(depth_f);
             depth_f = temporal_filter.process(depth_f);
@@ -477,27 +522,75 @@ void RealSenseProducer::run()
         const long depth_sensor_sec = static_cast<long>(depth_sensor_ns / 1000000000ULL);
         const long depth_sensor_usec = static_cast<long>((depth_sensor_ns % 1000000000ULL) / 1000ULL);
 
-        const int w = color_f.get_width();
-        const int h = color_f.get_height();
-        const auto color_host_now = std::chrono::system_clock::now();
-        const auto color_host_s = std::chrono::duration_cast<std::chrono::seconds>(color_host_now.time_since_epoch());
-        const long color_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            color_host_now.time_since_epoch() - color_host_s).count();
-        cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
+        if (!has_color_base) {
+            color_base_frame_number = color_frame_number;
+            has_color_base = true;
+        }
+        if (!has_depth_base) {
+            depth_base_frame_number = depth_frame_number;
+            has_depth_base = true;
+        }
 
-        const auto depth_host_now = std::chrono::system_clock::now();
-        const auto depth_host_s = std::chrono::duration_cast<std::chrono::seconds>(depth_host_now.time_since_epoch());
-        const long depth_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            depth_host_now.time_since_epoch() - depth_host_s).count();
-        cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
+        if (color_frame_number > last_color_frame_number) {
+            last_color_frame_number = color_frame_number;
+            color_queue.push_back(CachedColorFrame{
+                rgb.clone(),
+                color_frame_number,
+                color_host_s.count(),
+                color_host_ns,
+                color_sensor_sec,
+                color_sensor_usec,
+            });
+        }
 
-        if (!push_rgbd(StampedRealSenseFrame{
-                rgb.clone(), depth.clone(),
-                color_frame_number, depth_frame_number,
-                color_host_s.count(), color_host_ns,
-                color_sensor_sec, color_sensor_usec,
-                depth_host_s.count(), depth_host_ns,
-                depth_sensor_sec, depth_sensor_usec})) {
+        if (depth_frame_number > last_depth_frame_number) {
+            last_depth_frame_number = depth_frame_number;
+            depth_queue.push_back(CachedDepthFrame{
+                depth.clone(),
+                depth_frame_number,
+                depth_host_s.count(),
+                depth_host_ns,
+                depth_sensor_sec,
+                depth_sensor_usec,
+            });
+        }
+
+        bool push_failed = false;
+        while (live() && !color_queue.empty() && !depth_queue.empty()) {
+            const std::uint64_t color_rel =
+                color_queue.front().frame_number - color_base_frame_number;
+            const std::uint64_t depth_rel =
+                depth_queue.front().frame_number - depth_base_frame_number;
+
+            if (color_rel == depth_rel) {
+                CachedColorFrame color = std::move(color_queue.front());
+                CachedDepthFrame depth_frame = std::move(depth_queue.front());
+                color_queue.pop_front();
+                depth_queue.pop_front();
+
+                if (!push_rgbd(StampedRealSenseFrame{
+                        std::move(color.image),
+                        std::move(depth_frame.image),
+                        color.frame_number,
+                        depth_frame.frame_number,
+                        color.host_sec,
+                        color.host_nanosec,
+                        color.sensor_sec,
+                        color.sensor_usec,
+                        depth_frame.host_sec,
+                        depth_frame.host_nanosec,
+                        depth_frame.sensor_sec,
+                        depth_frame.sensor_usec})) {
+                    push_failed = true;
+                    break;
+                }
+            } else if (color_rel < depth_rel) {
+                color_queue.pop_front();
+            } else {
+                depth_queue.pop_front();
+            }
+        }
+        if (push_failed) {
             break;
         }
     }
