@@ -407,19 +407,25 @@ void RealSenseProducer::run()
         rs2::device live_dev = profile.get_device();
         if (auto c = live_dev.first<rs2::color_sensor>()) {
             if (c.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-                c.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-                std::cout << "[realsense] RGB Global Time Enabled = "
+                c.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
+                std::cout << "[realsense] RGB Global Time   = "
                           << (c.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
                           << std::endl;
             }
         }
         if (auto d = live_dev.first<rs2::depth_sensor>()) {
             if (d.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-                d.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-                std::cout << "[realsense] Depth Global Time Enabled = "
+                d.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
+                std::cout << "[realsense] Depth Global Time = "
                           << (d.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
                           << std::endl;
             }
+        }
+        if (motion_sensor && motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+            motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+            std::cout << "[realsense] IMU Global Time   = "
+                      << (motion_sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
+                      << std::endl;
         }
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
