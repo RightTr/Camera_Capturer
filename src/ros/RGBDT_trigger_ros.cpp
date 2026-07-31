@@ -156,7 +156,6 @@ ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::chrono::steady_clock::time_point g_output_start_at;
-std::int64_t frame_period_ns = 30000000LL;
 
 bool output_enabled()
 {
@@ -216,42 +215,6 @@ void write_times(bool flush = false)
                         << rs_times.depth_host_time << "\n";
         }
     }
-}
-
-int missed_count(std::int64_t last_host_ns, std::int64_t current_host_ns)
-{
-    if (last_host_ns <= 0 || current_host_ns <= last_host_ns) {
-        return 0;
-    }
-    const std::int64_t gap_ns = current_host_ns - last_host_ns;
-    if (gap_ns <= frame_period_ns + frame_period_ns / 2) {
-        return 0;
-    }
-    return static_cast<int>((gap_ns + frame_period_ns / 2) / frame_period_ns - 1);
-}
-
-void blank_guide(const TriggerEvent& trigger_event)
-{
-    guide_time_queue.push_back({
-        trigger_event.pwm_output_unix_ns,
-        format_timestamp_ns(trigger_event.pwm_output_unix_ns),
-        format_timestamp_ns(trigger_event.pwm_capture_unix_ns),
-        "",
-        "",
-    });
-    write_times();
-}
-
-void blank_rs(const TriggerEvent& trigger_event)
-{
-    rs_time_queue.push_back({
-        trigger_event.pwm_output_unix_ns,
-        "",
-        "",
-        "",
-        "",
-    });
-    write_times();
 }
 
 bool open_writers(const std::string& base_dir, bool save_images)
@@ -327,44 +290,21 @@ bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::cond
 
 void stereo_consumer()
 {
-    std::int64_t last_left_host_ns = 0;
-    std::int64_t last_right_host_ns = 0;
     while (!quitFlag.load()) {
         GuideFrame left_frame;
         GuideFrame right_frame;
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
 
-        const std::int64_t left_host_ns = to_ns_from_sec_nsec(
-            left_frame.host_sec,
-            left_frame.host_nanosec);
-        const std::int64_t right_host_ns = to_ns_from_sec_nsec(
-            right_frame.host_sec,
-            right_frame.host_nanosec);
-        const int missed_left = missed_count(last_left_host_ns, left_host_ns);
-        const int missed_right = missed_count(last_right_host_ns, right_host_ns);
-        const int missed_stereo = std::max(missed_left, missed_right);
-        for (int i = 0; i < missed_stereo; ++i) {
-            const TriggerEvent missed_event = pwm_stamps->take_guide_event();
-            if (missed_event.pwm_output_unix_ns <= 0) {
-                continue;
+        if (!output_enabled()) {
+            if (pwm_stamps) {
+                pwm_stamps->take_guide_event();
             }
-            if (if_save) {
-                std::lock_guard<std::mutex> lock(time_mutex);
-                blank_guide(missed_event);
-            }
-            std::cerr << "[rgbdt_trigger] Guide frame dropped; leaving stereo fields blank for PWM "
-                      << format_timestamp_ns(missed_event.pwm_output_unix_ns) << std::endl;
-        }
-        last_left_host_ns = left_host_ns;
-        last_right_host_ns = right_host_ns;
-
-        const TriggerEvent trigger_event = pwm_stamps->take_guide_event();
-        if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
 
-        if (!output_enabled()) {
+        const TriggerEvent trigger_event = pwm_stamps->take_guide_event();
+        if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
 
@@ -401,35 +341,19 @@ void stereo_consumer()
 
 void realsense_consumer()
 {
-    std::int64_t last_color_host_ns = 0;
     while (!quitFlag.load()) {
         StampedRealSenseFrame rs_frame;
         if (!rs_prod->pop_rgbd(rs_frame)) break;
 
-        const std::int64_t color_host_ns = to_ns_from_sec_nsec(
-            rs_frame.color_host_sec,
-            rs_frame.color_host_nanosec);
-        const int missed_rs = missed_count(last_color_host_ns, color_host_ns);
-        for (int i = 0; i < missed_rs; ++i) {
-            const TriggerEvent missed_event = pwm_stamps->take_realsense_event();
-            if (missed_event.pwm_output_unix_ns <= 0) {
-                continue;
+        if (!output_enabled()) {
+            if (pwm_stamps) {
+                pwm_stamps->take_realsense_event();
             }
-            if (if_save) {
-                std::lock_guard<std::mutex> lock(time_mutex);
-                blank_rs(missed_event);
-            }
-            std::cerr << "[rgbdt_trigger] RealSense RGBD frame dropped; leaving RGBD fields blank for PWM "
-                      << format_timestamp_ns(missed_event.pwm_output_unix_ns) << std::endl;
-        }
-        last_color_host_ns = color_host_ns;
-
-        const TriggerEvent trigger_event = pwm_stamps->take_realsense_event();
-        if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
 
-        if (!output_enabled()) {
+        const TriggerEvent trigger_event = pwm_stamps->take_realsense_event();
+        if (trigger_event.pwm_output_unix_ns <= 0) {
             continue;
         }
 
@@ -441,6 +365,9 @@ void realsense_consumer()
                 const std::int64_t color_sensor_ns = to_ns_from_sec_usec(
                     rs_frame.color_sensor_sec,
                     rs_frame.color_sensor_microsec);
+                const std::int64_t color_host_ns = to_ns_from_sec_nsec(
+                    rs_frame.color_host_sec,
+                    rs_frame.color_host_nanosec);
                 const std::int64_t depth_sensor_ns = to_ns_from_sec_usec(
                     rs_frame.depth_sensor_sec,
                     rs_frame.depth_sensor_microsec);
@@ -528,7 +455,6 @@ int main(int argc, char **argv)
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
     const int warmup_sec = get_param<int>("warmup_sec", 10);
-    frame_period_ns = get_param<std::int64_t>("frame_period_ns", 30000000LL);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string pwm_line = get_param<std::string>("pwm_line", "PAA.00");

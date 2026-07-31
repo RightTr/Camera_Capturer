@@ -428,7 +428,6 @@ void RealSenseProducer::run()
     bool has_depth_base = false;
     std::uint64_t color_base_frame_number = 0;
     std::uint64_t depth_base_frame_number = 0;
-
     try {
         rs2::pipeline_profile profile = pipeline.start(cfg, [&](const rs2::frame& frame) {
             frame_queue.enqueue(frame);
@@ -484,22 +483,18 @@ void RealSenseProducer::run()
         if (align_) out = align_to_color.process(out);
 
         rs2::video_frame color_f = out.get_color_frame();
-        rs2::depth_frame depth_f = out.get_depth_frame();
-        if (!color_f || !depth_f) continue;
-
-        const int w = color_f.get_width();
-        const int h = color_f.get_height();
         const auto color_host_now = std::chrono::system_clock::now();
         const auto color_host_s = std::chrono::duration_cast<std::chrono::seconds>(color_host_now.time_since_epoch());
         const long color_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             color_host_now.time_since_epoch() - color_host_s).count();
-        cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
 
+        rs2::depth_frame depth_f = out.get_depth_frame();
         const auto depth_host_now = std::chrono::system_clock::now();
         const auto depth_host_s = std::chrono::duration_cast<std::chrono::seconds>(depth_host_now.time_since_epoch());
         const long depth_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             depth_host_now.time_since_epoch() - depth_host_s).count();
-        cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
+
+        if (!color_f || !depth_f) continue;
 
         if (filter_) {
             depth_f = spatial_filter.process(depth_f);
@@ -521,6 +516,11 @@ void RealSenseProducer::run()
         const long color_sensor_usec = static_cast<long>((color_sensor_ns % 1000000000ULL) / 1000ULL);
         const long depth_sensor_sec = static_cast<long>(depth_sensor_ns / 1000000000ULL);
         const long depth_sensor_usec = static_cast<long>((depth_sensor_ns % 1000000000ULL) / 1000ULL);
+
+        const int w = color_f.get_width();
+        const int h = color_f.get_height();
+        cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
+        cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
 
         if (!has_color_base) {
             color_base_frame_number = color_frame_number;
