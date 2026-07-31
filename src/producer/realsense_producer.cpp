@@ -320,12 +320,6 @@ void RealSenseProducer::run()
     rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
     configure_frames_queue_size(color_sensor, rgbd_max_, "color");
     configure_frames_queue_size(depth_sensor, rgbd_max_, "depth");
-    if (color_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-        color_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-    }
-    if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-        depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-    }
 
     rs2::sensor motion_sensor;
     bool imu_started = false;
@@ -409,6 +403,24 @@ void RealSenseProducer::run()
             frame_queue.enqueue(frame);
         });
         if (on_start_) on_start_(profile);
+
+        rs2::device live_dev = profile.get_device();
+        if (auto c = live_dev.first<rs2::color_sensor>()) {
+            if (c.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+                c.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+                std::cout << "[realsense] RGB Global Time Enabled = "
+                          << (c.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
+                          << std::endl;
+            }
+        }
+        if (auto d = live_dev.first<rs2::depth_sensor>()) {
+            if (d.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+                d.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+                std::cout << "[realsense] Depth Global Time Enabled = "
+                          << (d.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
+                          << std::endl;
+            }
+        }
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
         if (imu_started) {
