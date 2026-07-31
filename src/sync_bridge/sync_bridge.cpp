@@ -45,8 +45,8 @@ bool SyncBridge::start()
         running_.store(false);
         return false;
     }
-    if (config_.pwm_line.empty()) {
-        std::fprintf(stderr, "SyncBridge requires pwm_line\n");
+    if (config_.trigger_line.empty()) {
+        std::fprintf(stderr, "SyncBridge requires trigger_line\n");
         running_.store(false);
         return false;
     }
@@ -80,7 +80,7 @@ bool SyncBridge::start()
         return false;
     }
 
-    gpio_line_ = gpiod_line_find(config_.pwm_line.c_str());
+    gpio_line_ = gpiod_line_find(config_.trigger_line.c_str());
     if (!gpio_line_) {
         log_errno("gpiod_line_find failed");
         send_control_request(kSetMasterStreamCmd, {0}, kSetMasterStreamCmd);
@@ -102,10 +102,10 @@ bool SyncBridge::start()
         return false;
     }
 
-    std::printf("SyncBridge started: serial_port=%s, serial_baud=%d, pwm_line=%s\n",
+    std::printf("SyncBridge started: serial_port=%s, serial_baud=%d, trigger_line=%s\n",
                 config_.serial_port.c_str(),
                 config_.serial_baud,
-                config_.pwm_line.c_str());
+                config_.trigger_line.c_str());
 
     serial_worker_ = std::thread(&SyncBridge::serial_loop, this);
     gpio_worker_ = std::thread(&SyncBridge::gpio_loop, this);
@@ -308,8 +308,8 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
             trigger_event_queue_.pop_front();
         }
 
-        std::printf("PWM trigger matched on %s: output=%s, capture=%s\n",
-                    config_.pwm_line.c_str(),
+        std::printf("Trigger matched on %s: output=%s, capture=%s\n",
+                    config_.trigger_line.c_str(),
                     format_timestamp_ns(output_ns).c_str(),
                     format_timestamp_ns(capture_ns).c_str());
         cv_.notify_one();
@@ -438,8 +438,8 @@ void SyncBridge::gpio_loop()
                 trigger_event_queue_.pop_front();
             }
 
-            std::printf("PWM trigger matched on %s: output=%s, capture=%s\n",
-                        config_.pwm_line.c_str(),
+            std::printf("Trigger matched on %s: output=%s, capture=%s\n",
+                        config_.trigger_line.c_str(),
                         format_timestamp_ns(output_ns).c_str(),
                         format_timestamp_ns(capture_ns).c_str());
             cv_.notify_one();

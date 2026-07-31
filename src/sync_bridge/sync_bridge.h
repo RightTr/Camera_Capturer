@@ -17,15 +17,15 @@ class SerialPort;
 struct gpiod_line;
 
 struct TriggerEvent {
-    std::int64_t pwm_output_unix_ns = 0;
-    std::int64_t pwm_capture_unix_ns = 0;
+    std::int64_t trigger_output_unix_ns = 0;
+    std::int64_t trigger_capture_unix_ns = 0;
 };
 
 class SyncBridge {
 public:
     struct Config {
         std::string serial_port;
-        std::string pwm_line = "PAA.00";
+        std::string trigger_line = "PAA.00";
         int serial_baud = 115200;
         std::size_t max_queue_size = 4096;
     };

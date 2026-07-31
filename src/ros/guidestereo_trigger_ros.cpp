@@ -98,17 +98,17 @@ void stereo_publisher(const ImagePublisher& left_image_pub,
         }
 
         const TriggerEvent trigger_event = sync_bridge.take_trigger_event();
-        if (trigger_event.pwm_output_unix_ns <= 0) {
+        if (trigger_event.trigger_output_unix_ns <= 0) {
             continue;
         }
 
-        left_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
-        right_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
+        left_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
+        right_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
 
         if (if_save) {
             if (time_stream.is_open()) {
-                time_stream << format_timestamp_ns(trigger_event.pwm_output_unix_ns) << ","
-                            << format_timestamp_ns(trigger_event.pwm_capture_unix_ns) << ","
+                time_stream << format_timestamp_ns(trigger_event.trigger_output_unix_ns) << ","
+                            << format_timestamp_ns(trigger_event.trigger_capture_unix_ns) << ","
                             << format_timestamp_sec_nsec(
                                    left_frame.host_sec,
                                    left_frame.host_nanosec) << ","
@@ -120,7 +120,7 @@ void stereo_publisher(const ImagePublisher& left_image_pub,
             guide_writers[1]->write(right_frame);
         }
 
-        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.pwm_output_unix_ns));
+        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.trigger_output_unix_ns));
         publish_image(left_image_pub, left_frame.gray_image, "mono8", "guide_left", stamp);
         publish_image(left_temp_pub, left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
         publish_image(right_image_pub, right_frame.gray_image, "mono8", "guide_right", stamp);
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;
     sync_config.serial_baud = serial_baud;
-    sync_config.pwm_line = trigger_line;
+    sync_config.trigger_line = trigger_line;
     sync_config.max_queue_size = static_cast<std::size_t>(std::max(1, sync_queue_size));
     SyncBridge sync_bridge(sync_config);
     if (!sync_bridge.start()) {

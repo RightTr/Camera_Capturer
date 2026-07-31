@@ -38,7 +38,7 @@ std::unique_ptr<RealSenseWriter> rs_writer;
 std::ofstream time_stream;
 
 struct GuideTimes {
-    std::int64_t pwm_output_unix_ns;
+    std::int64_t trigger_output_unix_ns;
     std::string trigger_output_time;
     std::string trigger_capture_time;
     std::string left_sensor_time;
@@ -48,7 +48,7 @@ struct GuideTimes {
 };
 
 struct RealSenseTimes {
-    std::int64_t pwm_output_unix_ns;
+    std::int64_t trigger_output_unix_ns;
     std::string color_sensor_time;
     std::string color_host_time;
     std::string depth_sensor_time;
@@ -110,7 +110,7 @@ private:
     {
         while (!stopped_.load(std::memory_order_relaxed) && !quitFlag.load()) {
             const TriggerEvent trigger_event = bridge_.take_trigger_event();
-            if (trigger_event.pwm_output_unix_ns <= 0) {
+            if (trigger_event.trigger_output_unix_ns <= 0) {
                 continue;
             }
 
@@ -204,7 +204,7 @@ void write_times(bool flush = false)
 
         const GuideTimes guide_times = guide_time_queue.front();
         const RealSenseTimes rs_times = rs_time_queue.front();
-        if (guide_times.pwm_output_unix_ns == rs_times.pwm_output_unix_ns) {
+        if (guide_times.trigger_output_unix_ns == rs_times.trigger_output_unix_ns) {
             guide_time_queue.pop_front();
             rs_time_queue.pop_front();
             time_stream << guide_times.trigger_output_time << ","
@@ -217,7 +217,7 @@ void write_times(bool flush = false)
                         << rs_times.color_host_time << ","
                         << rs_times.depth_sensor_time << ","
                         << rs_times.depth_host_time << "\n";
-        } else if (guide_times.pwm_output_unix_ns < rs_times.pwm_output_unix_ns) {
+        } else if (guide_times.trigger_output_unix_ns < rs_times.trigger_output_unix_ns) {
             guide_time_queue.pop_front();
             time_stream << guide_times.trigger_output_time << ","
                         << guide_times.trigger_capture_time << ","
@@ -361,20 +361,20 @@ void stereo_consumer()
         }
 
         const TriggerEvent trigger_event = trigger_stamps->take_guide_event();
-        if (trigger_event.pwm_output_unix_ns <= 0) {
+        if (trigger_event.trigger_output_unix_ns <= 0) {
             continue;
         }
 
-        left_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
-        right_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
+        left_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
+        right_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
 
         if (if_save) {
             {
                 std::lock_guard<std::mutex> lock(time_mutex);
                 guide_time_queue.push_back({
-                    trigger_event.pwm_output_unix_ns,
-                    format_timestamp_ns(trigger_event.pwm_output_unix_ns),
-                    format_timestamp_ns(trigger_event.pwm_capture_unix_ns),
+                    trigger_event.trigger_output_unix_ns,
+                    format_timestamp_ns(trigger_event.trigger_output_unix_ns),
+                    format_timestamp_ns(trigger_event.trigger_capture_unix_ns),
                     format_timestamp_sec_usec_as_nsec(left_frame.sensor_sec, left_frame.sensor_microsec),
                     format_timestamp_sec_nsec(left_frame.host_sec, left_frame.host_nanosec),
                     format_timestamp_sec_usec_as_nsec(right_frame.sensor_sec, right_frame.sensor_microsec),
@@ -386,7 +386,7 @@ void stereo_consumer()
             guide_writers[1]->write(right_frame);
         }
 
-        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.pwm_output_unix_ns));
+        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.trigger_output_unix_ns));
         publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", stamp);
         publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
         publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", stamp);
@@ -450,11 +450,11 @@ void realsense_consumer()
         }
 
         const TriggerEvent trigger_event = trigger_stamps->take_realsense_event();
-        if (trigger_event.pwm_output_unix_ns <= 0) {
+        if (trigger_event.trigger_output_unix_ns <= 0) {
             continue;
         }
 
-        rs_frame.trigger_unix_ns = trigger_event.pwm_output_unix_ns;
+        rs_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
 
         if (if_save) {
             {
@@ -472,7 +472,7 @@ void realsense_consumer()
                     rs_frame.depth_host_sec,
                     rs_frame.depth_host_nanosec);
                 rs_time_queue.push_back({
-                    trigger_event.pwm_output_unix_ns,
+                    trigger_event.trigger_output_unix_ns,
                     format_timestamp_ns(color_sensor_ns),
                     format_timestamp_ns(color_host_ns),
                     format_timestamp_ns(depth_sensor_ns),
@@ -483,7 +483,7 @@ void realsense_consumer()
             rs_writer->write_rgbd(rs_frame);
         }
 
-        const auto rs_stamp = make_time_ns(static_cast<uint64_t>(trigger_event.pwm_output_unix_ns));
+        const auto rs_stamp = make_time_ns(static_cast<uint64_t>(trigger_event.trigger_output_unix_ns));
         publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", rs_stamp);
         publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
     }
@@ -635,7 +635,7 @@ int main(int argc, char **argv)
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;
     sync_config.serial_baud = serial_baud;
-    sync_config.pwm_line = trigger_line;
+    sync_config.trigger_line = trigger_line;
     sync_config.max_queue_size = static_cast<std::size_t>(std::max(1, sync_queue_size));
     sync_bridge = std::make_unique<SyncBridge>(sync_config);
     if (!sync_bridge->start()) {
