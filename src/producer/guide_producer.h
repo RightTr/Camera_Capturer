@@ -122,6 +122,7 @@ public:
     void set_serial_query_time(int interval_ms);
     void run();
     bool pop(GuideFrame& frame);
+    void clear();
     void stop();
     int start_capture();
     int start_serial(std::ofstream* stream = nullptr);

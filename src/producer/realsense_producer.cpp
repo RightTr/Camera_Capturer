@@ -257,6 +257,14 @@ bool RealSenseProducer::pop_rgbd(StampedRealSenseFrame& frame)
     return true;
 }
 
+void RealSenseProducer::clear_rgbd()
+{
+    std::lock_guard<std::mutex> lock(rgb_mutex_);
+    std::queue<StampedRealSenseFrame> empty;
+    rgbd_queue_.swap(empty);
+    rgb_cv_.notify_all();
+}
+
 bool RealSenseProducer::pop_imu_pub(StampedImuFrame& frame)
 {
     std::unique_lock<std::mutex> lock(imu_mutex_);

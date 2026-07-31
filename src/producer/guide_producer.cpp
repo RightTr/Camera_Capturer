@@ -276,6 +276,14 @@ bool GuideProducer::pop(GuideFrame& frame)
     return true;
 }
 
+void GuideProducer::clear()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::queue<GuideFrame> empty;
+    queue_.swap(empty);
+    cv_.notify_all();
+}
+
 void GuideProducer::run()
 {
     const std::string name = camera_name(cam_id_);

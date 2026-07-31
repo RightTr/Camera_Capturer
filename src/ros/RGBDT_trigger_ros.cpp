@@ -97,6 +97,14 @@ public:
         return take_event(realsense_queue_);
     }
 
+    void clear()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::deque<TriggerEvent>().swap(guide_queue_);
+        std::deque<TriggerEvent>().swap(realsense_queue_);
+        cv_.notify_all();
+    }
+
 private:
     void run()
     {
@@ -158,6 +166,9 @@ ImagePublisher g_rs_depth_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::chrono::steady_clock::time_point g_output_start_at;
+std::atomic<bool> g_warmup_done(false);
+std::atomic<std::uint64_t> g_warmup_gen(0);
+std::mutex g_warmup_mutex;
 
 bool output_enabled()
 {
@@ -298,11 +309,49 @@ bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::cond
 
 void stereo_consumer()
 {
+    std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    bool skip_one = false;
     while (!quitFlag.load()) {
         GuideFrame left_frame;
         GuideFrame right_frame;
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
+
+        if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(g_warmup_mutex);
+            if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
+                guides[0]->clear();
+                guides[1]->clear();
+                if (rs_prod) {
+                    rs_prod->clear_rgbd();
+                }
+                if (trigger_stamps) {
+                    trigger_stamps->clear();
+                }
+                if (sync_bridge) {
+                    sync_bridge->clear();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(time_mutex);
+                    guide_time_queue.clear();
+                    rs_time_queue.clear();
+                }
+                g_warmup_done.store(true, std::memory_order_release);
+                g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+                seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                continue;
+            }
+        }
+
+        const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
+        if (gen != seen_gen) {
+            seen_gen = gen;
+            skip_one = true;
+        }
+        if (skip_one) {
+            skip_one = false;
+            continue;
+        }
 
         if (!output_enabled()) {
             if (trigger_stamps) {
@@ -351,9 +400,47 @@ void stereo_consumer()
 
 void realsense_consumer()
 {
+    std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    bool skip_one = false;
     while (!quitFlag.load()) {
         StampedRealSenseFrame rs_frame;
         if (!rs_prod->pop_rgbd(rs_frame)) break;
+
+        if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(g_warmup_mutex);
+            if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
+                guides[0]->clear();
+                guides[1]->clear();
+                if (rs_prod) {
+                    rs_prod->clear_rgbd();
+                }
+                if (trigger_stamps) {
+                    trigger_stamps->clear();
+                }
+                if (sync_bridge) {
+                    sync_bridge->clear();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(time_mutex);
+                    guide_time_queue.clear();
+                    rs_time_queue.clear();
+                }
+                g_warmup_done.store(true, std::memory_order_release);
+                g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+                seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                continue;
+            }
+        }
+
+        const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
+        if (gen != seen_gen) {
+            seen_gen = gen;
+            skip_one = true;
+        }
+        if (skip_one) {
+            skip_one = false;
+            continue;
+        }
 
         if (!output_enabled()) {
             if (trigger_stamps) {

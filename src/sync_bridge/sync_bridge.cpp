@@ -162,6 +162,15 @@ TriggerEvent SyncBridge::take_trigger_event()
     return event;
 }
 
+void SyncBridge::clear()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::deque<std::int64_t>().swap(serial_stamp_queue_);
+    std::deque<std::int64_t>().swap(gpio_capture_queue_);
+    std::deque<TriggerEvent>().swap(trigger_event_queue_);
+    cv_.notify_all();
+}
+
 bool SyncBridge::send_control_request(unsigned char cmd,
                                       const std::vector<unsigned char>& payload,
                                       unsigned char expected_cmd)

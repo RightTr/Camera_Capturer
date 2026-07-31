@@ -1,9 +1,12 @@
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstdint>
+#include <chrono>
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,6 +24,15 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<GuideWriter> guide_writers[2];
 std::ofstream time_stream;
+std::atomic<bool> g_warmup_done(false);
+std::atomic<std::uint64_t> g_warmup_gen(0);
+std::mutex g_warmup_mutex;
+std::chrono::steady_clock::time_point g_output_start_at;
+
+bool output_enabled()
+{
+    return std::chrono::steady_clock::now() >= g_output_start_at;
+}
 
 bool open_writers(const std::string& base_dir, bool save_images)
 {
@@ -49,11 +61,41 @@ void stereo_publisher(const ImagePublisher& left_image_pub,
                       SyncBridge& sync_bridge,
                       bool if_save)
 {
+    std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    bool skip_one = false;
     while (ok()) {
         GuideFrame left_frame;
         GuideFrame right_frame;
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
+
+        if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(g_warmup_mutex);
+            if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
+                guides[0]->clear();
+                guides[1]->clear();
+                sync_bridge.clear();
+                g_warmup_done.store(true, std::memory_order_release);
+                g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+                seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                continue;
+            }
+        }
+
+        const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
+        if (gen != seen_gen) {
+            seen_gen = gen;
+            skip_one = true;
+        }
+        if (skip_one) {
+            skip_one = false;
+            continue;
+        }
+
+        if (!output_enabled()) {
+            sync_bridge.take_trigger_event();
+            continue;
+        }
 
         const TriggerEvent trigger_event = sync_bridge.take_trigger_event();
         if (trigger_event.pwm_output_unix_ns <= 0) {
@@ -102,6 +144,7 @@ int main(int argc, char **argv) {
     const int if_save = get_param<int>("if_save", 0);
     const int if_save_img = get_param<int>("if_save_img", 1);
     const std::string outputdir = get_param<std::string>("output_dir", "./capture");
+    const int warmup = get_param<int>("warmup", 10);
 
     const auto left_image_pub = advertise<ImageMsg>("guide_left/image", 30);
     const auto right_image_pub = advertise<ImageMsg>("guide_right/image", 30);
@@ -155,6 +198,8 @@ int main(int argc, char **argv) {
     if (!sync_bridge.start()) {
         return EXIT_FAILURE;
     }
+
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup));
 
     std::thread publisher(
         stereo_publisher,

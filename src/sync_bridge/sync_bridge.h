@@ -37,6 +37,7 @@ public:
     void stop();
 
     TriggerEvent take_trigger_event();
+    void clear();
 
 private:
     void serial_loop();

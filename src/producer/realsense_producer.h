@@ -62,6 +62,7 @@ public:
     bool pop_rgbd(StampedRealSenseFrame& frame);
     bool pop_imu_pub(StampedImuFrame& frame);
     bool pop_imu_csv(StampedImuFrame& frame);
+    void clear_rgbd();
     void stop();
 
 private:
