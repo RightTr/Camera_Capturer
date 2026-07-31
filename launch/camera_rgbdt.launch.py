@@ -15,7 +15,7 @@ def generate_launch_description():
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     imu_fps = LaunchConfiguration("imu_fps")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
-    warmup_sec = LaunchConfiguration("warmup_sec")
+    warmup = LaunchConfiguration("warmup")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -58,7 +58,7 @@ def generate_launch_description():
             description="Internal IMU producer queue size.",
         ),
         DeclareLaunchArgument(
-            "warmup_sec",
+            "warmup",
             default_value="10",
             description="Seconds to wait after RealSense is ready before output starts.",
         ),
@@ -80,7 +80,7 @@ def generate_launch_description():
                 "guide_query_ms": guide_query_ms,
                 "imu_fps": imu_fps,
                 "imu_queue_size": imu_queue_size,
-                "warmup_sec": warmup_sec,
+                "warmup": warmup,
             }],
         ),
         Node(

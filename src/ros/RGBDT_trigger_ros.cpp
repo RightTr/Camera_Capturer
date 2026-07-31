@@ -464,7 +464,7 @@ int main(int argc, char **argv)
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
-    const int warmup_sec = get_param<int>("warmup_sec", 10);
+    const int warmup = get_param<int>("warmup", 10);
     const std::string serial_port = get_param<std::string>("serial_port", "/dev/sync_time");
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string trigger_line = get_param<std::string>("trigger_line", "PAA.00");
@@ -558,7 +558,7 @@ int main(int argc, char **argv)
         static_cast<std::size_t>(std::max(1, sync_queue_size)));
     trigger_stamps->start();
 
-    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup_sec));
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup));
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(realsense_consumer);

@@ -207,7 +207,8 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    const int warmup = 10;
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup));
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(stereo_consumer);

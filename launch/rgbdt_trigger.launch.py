@@ -15,8 +15,7 @@ def generate_launch_description():
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     imu_fps = LaunchConfiguration("imu_fps")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
-    warmup_sec = LaunchConfiguration("warmup_sec")
-    frame_period_ns = LaunchConfiguration("frame_period_ns")
+    warmup = LaunchConfiguration("warmup")
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
     trigger_line = LaunchConfiguration("trigger_line")
@@ -63,14 +62,9 @@ def generate_launch_description():
             description="Internal IMU producer queue size.",
         ),
         DeclareLaunchArgument(
-            "warmup_sec",
+            "warmup",
             default_value="10",
             description="Seconds to wait after RealSense is ready before output starts.",
-        ),
-        DeclareLaunchArgument(
-            "frame_period_ns",
-            default_value="30000000",
-            description="Expected image frame period in ns for dropped-frame detection.",
         ),
         DeclareLaunchArgument(
             "serial_port",
@@ -110,8 +104,7 @@ def generate_launch_description():
                 "guide_query_ms": guide_query_ms,
                 "imu_fps": imu_fps,
                 "imu_queue_size": imu_queue_size,
-                "warmup_sec": warmup_sec,
-                "frame_period_ns": frame_period_ns,
+                "warmup": warmup,
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
                 "trigger_line": trigger_line,

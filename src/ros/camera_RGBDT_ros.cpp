@@ -343,7 +343,7 @@ int main(int argc, char **argv)
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
-    const int warmup_sec = get_param<int>("warmup_sec", 10);
+    const int warmup = get_param<int>("warmup", 10);
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
@@ -416,7 +416,7 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup_sec));
+    g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup));
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(realsense_consumer);
