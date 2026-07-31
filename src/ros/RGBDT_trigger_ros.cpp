@@ -507,7 +507,10 @@ int main(int argc, char **argv)
         guide->set_serial_query_time(guide_query_ms);
     }
 
-    if (!GuideProducer::start_serial_pair(guides)) {
+    if (!GuideProducer::start_serial_pair(
+            guides,
+            if_save ? guide_writers[0]->temp_stream() : nullptr,
+            if_save ? guide_writers[1]->temp_stream() : nullptr)) {
         return EXIT_FAILURE;
     }
 
