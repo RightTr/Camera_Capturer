@@ -452,6 +452,8 @@ void RealSenseProducer::run()
 
         const uint64_t color_sensor_ns = static_cast<uint64_t>(color_ts_ms * 1.0e6);
         const uint64_t depth_sensor_ns = static_cast<uint64_t>(depth_ts_ms * 1.0e6);
+        const uint64_t color_frame_number = color_f.get_frame_number();
+        const uint64_t depth_frame_number = depth_f.get_frame_number();
         const long color_sensor_sec = static_cast<long>(color_sensor_ns / 1000000000ULL);
         const long color_sensor_usec = static_cast<long>((color_sensor_ns % 1000000000ULL) / 1000ULL);
         const long depth_sensor_sec = static_cast<long>(depth_sensor_ns / 1000000000ULL);
@@ -473,6 +475,7 @@ void RealSenseProducer::run()
 
         if (!push_rgbd(StampedRealSenseFrame{
                 rgb.clone(), depth.clone(),
+                color_frame_number, depth_frame_number,
                 color_host_s.count(), color_host_ns,
                 color_sensor_sec, color_sensor_usec,
                 depth_host_s.count(), depth_host_ns,

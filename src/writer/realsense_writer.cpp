@@ -49,7 +49,8 @@ bool RealSenseWriter::open()
     std::cout << "RealSense output dir: "
               << std::filesystem::absolute(output_dir_ + "/realsense").string()
               << " (save_images=" << save_images_ << ")" << std::endl;
-    time_stream_ << "color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
+    time_stream_ << "color_frame_number,color_sensor_time,color_host_time,"
+                    "depth_frame_number,depth_sensor_time,depth_host_time\n";
     accel_stream_ << "host_time,sensor_time,ax,ay,az\n";
     gyro_stream_ << "host_time,sensor_time,gx,gy,gz\n";
     return true;
@@ -87,8 +88,10 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
         frame.depth_host_sec,
         frame.depth_host_nanosec);
 
-    time_stream_ << color_sensor_time << ","
+    time_stream_ << frame.color_frame_number << ","
+                 << color_sensor_time << ","
                  << color_host_time << ","
+                 << frame.depth_frame_number << ","
                  << depth_sensor_time << ","
                  << depth_host_time << std::endl;
 

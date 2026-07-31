@@ -14,6 +14,8 @@
 struct StampedRealSenseFrame {
     cv::Mat color_image;
     cv::Mat depth_image_raw;
+    std::uint64_t color_frame_number;
+    std::uint64_t depth_frame_number;
     long color_host_sec;
     long color_host_nanosec;
     long color_sensor_sec;
