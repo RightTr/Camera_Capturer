@@ -41,7 +41,9 @@ struct GuideTimes {
     std::int64_t pwm_output_unix_ns;
     std::string pwm_output_time;
     std::string pwm_capture_time;
+    std::string left_sensor_time;
     std::string left_host_time;
+    std::string right_sensor_time;
     std::string right_host_time;
 };
 
@@ -169,7 +171,7 @@ void write_times(bool flush = false)
             if (!flush) return;
             const RealSenseTimes rs_times = rs_time_queue.front();
             rs_time_queue.pop_front();
-            time_stream << ",,,,"
+            time_stream << ",,,,,"
                         << rs_times.color_sensor_time << ","
                         << rs_times.color_host_time << ","
                         << rs_times.depth_sensor_time << ","
@@ -182,7 +184,9 @@ void write_times(bool flush = false)
             guide_time_queue.pop_front();
             time_stream << guide_times.pwm_output_time << ","
                         << guide_times.pwm_capture_time << ","
+                        << guide_times.left_sensor_time << ","
                         << guide_times.left_host_time << ","
+                        << guide_times.right_sensor_time << ","
                         << guide_times.right_host_time << ",,,,\n";
             continue;
         }
@@ -194,7 +198,9 @@ void write_times(bool flush = false)
             rs_time_queue.pop_front();
             time_stream << guide_times.pwm_output_time << ","
                         << guide_times.pwm_capture_time << ","
+                        << guide_times.left_sensor_time << ","
                         << guide_times.left_host_time << ","
+                        << guide_times.right_sensor_time << ","
                         << guide_times.right_host_time << ","
                         << rs_times.color_sensor_time << ","
                         << rs_times.color_host_time << ","
@@ -204,11 +210,13 @@ void write_times(bool flush = false)
             guide_time_queue.pop_front();
             time_stream << guide_times.pwm_output_time << ","
                         << guide_times.pwm_capture_time << ","
+                        << guide_times.left_sensor_time << ","
                         << guide_times.left_host_time << ","
+                        << guide_times.right_sensor_time << ","
                         << guide_times.right_host_time << ",,,,\n";
         } else {
             rs_time_queue.pop_front();
-            time_stream << ",,,,"
+            time_stream << ",,,,,"
                         << rs_times.color_sensor_time << ","
                         << rs_times.color_host_time << ","
                         << rs_times.depth_sensor_time << ","
@@ -233,7 +241,7 @@ bool open_writers(const std::string& base_dir, bool save_images)
     if (!time_stream.is_open()) {
         return false;
     }
-    time_stream << "pwm_output_time,pwm_capture_time,left_host_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
+    time_stream << "pwm_output_time,pwm_capture_time,left_sensor_time,left_host_time,right_sensor_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time\n";
 
     rs_writer = std::make_unique<RealSenseWriter>(base_dir, save_images);
     if (!rs_writer->open()) {
@@ -318,7 +326,9 @@ void stereo_consumer()
                     trigger_event.pwm_output_unix_ns,
                     format_timestamp_ns(trigger_event.pwm_output_unix_ns),
                     format_timestamp_ns(trigger_event.pwm_capture_unix_ns),
+                    format_timestamp_sec_usec_as_nsec(left_frame.sensor_sec, left_frame.sensor_microsec),
                     format_timestamp_sec_nsec(left_frame.host_sec, left_frame.host_nanosec),
+                    format_timestamp_sec_usec_as_nsec(right_frame.sensor_sec, right_frame.sensor_microsec),
                     format_timestamp_sec_nsec(right_frame.host_sec, right_frame.host_nanosec),
                 });
                 write_times();
