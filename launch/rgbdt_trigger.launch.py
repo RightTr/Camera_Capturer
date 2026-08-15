@@ -90,7 +90,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "enable_guide_temperature",
-            default_value="true",
+            default_value="false",
             description="Enable Guide temperature conversion and temperature topic publishing.",
         ),
         DeclareLaunchArgument(

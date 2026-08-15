@@ -478,8 +478,7 @@ void RealSenseProducer::run()
 
     while (live()) {
         rs2::frame frame;
-        if (!frame_queue.poll_for_frame(&frame)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (!frame_queue.try_wait_for_frame(&frame, 100)) {
             continue;
         }
         rs2::frameset frameset = frame.as<rs2::frameset>();

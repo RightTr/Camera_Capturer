@@ -486,10 +486,6 @@ void SyncBridge::gpio_loop()
                 trigger_event_queue_.pop_front();
             }
 
-            std::printf("Trigger matched on %s: output=%s, capture=%s\n",
-                        config_.trigger_line.c_str(),
-                        format_timestamp_ns(output_ns).c_str(),
-                        format_timestamp_ns(capture_ns).c_str());
             cv_.notify_one();
         }
 

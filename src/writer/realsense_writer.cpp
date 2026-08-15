@@ -93,7 +93,7 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
                  << color_host_time << ","
                  << frame.depth_frame_number << ","
                  << depth_sensor_time << ","
-                 << depth_host_time << std::endl;
+                 << depth_host_time << '\n';
 
     if (save_images_) {
         std::ostringstream ss;

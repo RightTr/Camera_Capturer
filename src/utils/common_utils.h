@@ -5,8 +5,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <iomanip>
-#include <sstream>
 #include <string>
 
 #include <libserial/SerialPort.h>
@@ -38,9 +36,9 @@ inline int64_t to_ns_from_sec_usec(long sec, long usec)
 
 inline std::string format_timestamp_sec_subsec(long sec, long subsec, int width)
 {
-    std::ostringstream ss;
-    ss << sec << "." << std::setw(width) << std::setfill('0') << subsec;
-    return ss.str();
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%ld.%0*ld", sec, width, subsec);
+    return buffer;
 }
 
 inline std::string format_timestamp_sec_nsec(long sec, long nsec)
