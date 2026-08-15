@@ -496,12 +496,12 @@ void realsense_consumer()
     }
 }
 
-void imu_consumer()
+void accel_consumer()
 {
     for (;;) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu_pub(frame)) {
-            std::cerr << "[realsense] IMU consumer stopped" << std::endl;
+        if (!rs_prod->pop_accel(frame)) {
+            std::cerr << "[realsense] accel consumer stopped" << std::endl;
             break;
         }
 
@@ -509,23 +509,36 @@ void imu_consumer()
             continue;
         }
 
-        if (frame.stream_type == RS2_STREAM_ACCEL) {
-            publish_accel_measurement(
-                g_rs_accel_pub,
-                "realsense_accel",
-                make_time_ns(frame.sensor_ns),
-                frame.x,
-                frame.y,
-                frame.z);
-        } else if (frame.stream_type == RS2_STREAM_GYRO) {
-            publish_gyro_measurement(
-                g_rs_gyro_pub,
-                "realsense_gyro",
-                make_time_ns(frame.sensor_ns),
-                frame.x,
-                frame.y,
-                frame.z);
+        publish_accel_measurement(
+            g_rs_accel_pub,
+            "realsense_accel",
+            make_time_ns(frame.sensor_ns),
+            frame.x,
+            frame.y,
+            frame.z);
+    }
+}
+
+void gyro_consumer()
+{
+    for (;;) {
+        StampedImuFrame frame;
+        if (!rs_prod->pop_gyro(frame)) {
+            std::cerr << "[realsense] gyro consumer stopped" << std::endl;
+            break;
         }
+
+        if (!output_enabled()) {
+            continue;
+        }
+
+        publish_gyro_measurement(
+            g_rs_gyro_pub,
+            "realsense_gyro",
+            make_time_ns(frame.sensor_ns),
+            frame.x,
+            frame.y,
+            frame.z);
     }
 }
 
@@ -563,8 +576,10 @@ int main(int argc, char **argv)
 
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
-    g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
-    g_guide_temp_pubs[1] = advertise<ImageMsg>("guide_right/temperature", 5);
+    if (g_enable_guide_temperature) {
+        g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
+        g_guide_temp_pubs[1] = advertise<ImageMsg>("guide_right/temperature", 5);
+    }
     g_rs_rgb_pub = advertise<ImageMsg>("realsense/rgb/image", 5);
     g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
     g_rs_accel_pub = advertise<ImuMsg>("realsense/imu/accel", 50);
@@ -657,7 +672,8 @@ int main(int argc, char **argv)
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(realsense_consumer);
-    consumers.emplace_back(imu_consumer);
+    consumers.emplace_back(accel_consumer);
+    consumers.emplace_back(gyro_consumer);
     if (if_save) {
         consumers.emplace_back(imu_writer);
     }

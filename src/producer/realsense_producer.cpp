@@ -203,7 +203,8 @@ void RealSenseProducer::stop()
 {
     stopped_.store(true, std::memory_order_relaxed);
     rgb_cv_.notify_all();
-    imu_cv_.notify_all();
+    accel_cv_.notify_all();
+    gyro_cv_.notify_all();
     imu_save_cv_.notify_all();
 }
 
@@ -224,20 +225,45 @@ bool RealSenseProducer::push_rgbd(StampedRealSenseFrame&& frame)
 
 bool RealSenseProducer::push_imu(StampedImuFrame&& frame)
 {
-    std::unique_lock<std::mutex> lock(imu_mutex_);
-    imu_cv_.wait(lock, [&] {
-        return imu_queue_.size() < static_cast<size_t>(imu_max_) || !live();
-    });
-    if (!live()) {
+    auto push_queue = [&](auto& mutex, auto& cv, auto& queue, StampedImuFrame&& value) {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&] {
+            return queue.size() < static_cast<size_t>(imu_max_) || !live();
+        });
+        if (!live()) {
+            return false;
+        }
+        queue.emplace(std::move(value));
+        lock.unlock();
+        cv.notify_one();
+        return true;
+    };
+
+    if (frame.stream_type == RS2_STREAM_ACCEL) {
+        if (!push_queue(accel_mutex_, accel_cv_, accel_queue_, StampedImuFrame(frame))) {
+            return false;
+        }
+    } else if (frame.stream_type == RS2_STREAM_GYRO) {
+        if (!push_queue(gyro_mutex_, gyro_cv_, gyro_queue_, StampedImuFrame(frame))) {
+            return false;
+        }
+    } else {
         return false;
     }
+
     if (imu_csv_) {
+        std::unique_lock<std::mutex> lock(imu_save_mutex_);
+        imu_save_cv_.wait(lock, [&] {
+            return imu_save_queue_.size() < static_cast<size_t>(imu_max_) || !live();
+        });
+        if (!live()) {
+            return false;
+        }
         imu_save_queue_.push(frame);
+        lock.unlock();
+        imu_save_cv_.notify_one();
     }
-    imu_queue_.emplace(std::move(frame));
-    lock.unlock();
-    imu_cv_.notify_one();
-    imu_save_cv_.notify_one();
+
     return true;
 }
 
@@ -265,25 +291,41 @@ void RealSenseProducer::clear_rgbd()
     rgb_cv_.notify_all();
 }
 
-bool RealSenseProducer::pop_imu_pub(StampedImuFrame& frame)
+bool RealSenseProducer::pop_accel(StampedImuFrame& frame)
 {
-    std::unique_lock<std::mutex> lock(imu_mutex_);
-    imu_cv_.wait(lock, [&] {
-        return !imu_queue_.empty() || !live();
+    std::unique_lock<std::mutex> lock(accel_mutex_);
+    accel_cv_.wait(lock, [&] {
+        return !accel_queue_.empty() || !live();
     });
-    if (imu_queue_.empty()) {
+    if (accel_queue_.empty()) {
         return false;
     }
-    frame = std::move(imu_queue_.front());
-    imu_queue_.pop();
+    frame = std::move(accel_queue_.front());
+    accel_queue_.pop();
     lock.unlock();
-    imu_cv_.notify_one();
+    accel_cv_.notify_one();
+    return true;
+}
+
+bool RealSenseProducer::pop_gyro(StampedImuFrame& frame)
+{
+    std::unique_lock<std::mutex> lock(gyro_mutex_);
+    gyro_cv_.wait(lock, [&] {
+        return !gyro_queue_.empty() || !live();
+    });
+    if (gyro_queue_.empty()) {
+        return false;
+    }
+    frame = std::move(gyro_queue_.front());
+    gyro_queue_.pop();
+    lock.unlock();
+    gyro_cv_.notify_one();
     return true;
 }
 
 bool RealSenseProducer::pop_imu_csv(StampedImuFrame& frame)
 {
-    std::unique_lock<std::mutex> lock(imu_mutex_);
+    std::unique_lock<std::mutex> lock(imu_save_mutex_);
     imu_save_cv_.wait(lock, [&] {
         return !imu_save_queue_.empty() || !live();
     });
@@ -293,7 +335,7 @@ bool RealSenseProducer::pop_imu_csv(StampedImuFrame& frame)
     frame = std::move(imu_save_queue_.front());
     imu_save_queue_.pop();
     lock.unlock();
-    imu_cv_.notify_one();
+    imu_save_cv_.notify_one();
     return true;
 }
 

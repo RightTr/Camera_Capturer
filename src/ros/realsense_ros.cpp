@@ -62,32 +62,41 @@ void realsense_consumer()
     }
 }
 
-void imu_consumer()
+void accel_consumer()
 {
     while (!quitFlag.load()) {
         StampedImuFrame frame;
-        if (!rs_prod->pop_imu_pub(frame)) {
-            std::cerr << "[realsense] IMU consumer stopped" << std::endl;
+        if (!rs_prod->pop_accel(frame)) {
+            std::cerr << "[realsense] accel consumer stopped" << std::endl;
             break;
         }
 
-        if (frame.stream_type == RS2_STREAM_ACCEL) {
-            publish_accel_measurement(
-                g_rs_accel_pub,
-                "realsense_accel",
-                make_time_ns(frame.sensor_ns),
-                frame.x,
-                frame.y,
-                frame.z);
-        } else if (frame.stream_type == RS2_STREAM_GYRO) {
-            publish_gyro_measurement(
-                g_rs_gyro_pub,
-                "realsense_gyro",
-                make_time_ns(frame.sensor_ns),
-                frame.x,
-                frame.y,
-                frame.z);
+        publish_accel_measurement(
+            g_rs_accel_pub,
+            "realsense_accel",
+            make_time_ns(frame.sensor_ns),
+            frame.x,
+            frame.y,
+            frame.z);
+    }
+}
+
+void gyro_consumer()
+{
+    while (!quitFlag.load()) {
+        StampedImuFrame frame;
+        if (!rs_prod->pop_gyro(frame)) {
+            std::cerr << "[realsense] gyro consumer stopped" << std::endl;
+            break;
         }
+
+        publish_gyro_measurement(
+            g_rs_gyro_pub,
+            "realsense_gyro",
+            make_time_ns(frame.sensor_ns),
+            frame.x,
+            frame.y,
+            frame.z);
     }
 }
 
@@ -185,7 +194,8 @@ int main(int argc, char **argv)
 
     threads.emplace_back(realsense_consumer);
     if (enable_imu) {
-        threads.emplace_back(imu_consumer);
+        threads.emplace_back(accel_consumer);
+        threads.emplace_back(gyro_consumer);
         if (if_save) {
             threads.emplace_back(imu_writer);
         }

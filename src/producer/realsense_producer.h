@@ -60,7 +60,8 @@ public:
 
     void run();
     bool pop_rgbd(StampedRealSenseFrame& frame);
-    bool pop_imu_pub(StampedImuFrame& frame);
+    bool pop_accel(StampedImuFrame& frame);
+    bool pop_gyro(StampedImuFrame& frame);
     bool pop_imu_csv(StampedImuFrame& frame);
     void clear_rgbd();
     void stop();
@@ -87,12 +88,16 @@ private:
     std::function<void(double)> on_scale_;
 
     mutable std::mutex rgb_mutex_;
-    mutable std::mutex imu_mutex_;
+    mutable std::mutex accel_mutex_;
+    mutable std::mutex gyro_mutex_;
+    mutable std::mutex imu_save_mutex_;
     std::condition_variable rgb_cv_;
-    std::condition_variable imu_cv_;
+    std::condition_variable accel_cv_;
+    std::condition_variable gyro_cv_;
     std::condition_variable imu_save_cv_;
     std::queue<StampedRealSenseFrame> rgbd_queue_;
-    std::queue<StampedImuFrame> imu_queue_;
+    std::queue<StampedImuFrame> accel_queue_;
+    std::queue<StampedImuFrame> gyro_queue_;
     std::queue<StampedImuFrame> imu_save_queue_;
     std::atomic<bool> stopped_{false};
 };
