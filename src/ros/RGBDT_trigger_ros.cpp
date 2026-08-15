@@ -38,27 +38,34 @@ std::unique_ptr<GuideWriter> guide_writers[2];
 std::unique_ptr<RealSenseWriter> rs_writer;
 std::ofstream time_stream;
 
-struct GuideTimes {
-    std::int64_t trigger_output_unix_ns;
+struct TimeRow {
+    std::uint64_t id = 0;
+    std::int64_t trigger_output_unix_ns = 0;
+    std::int64_t trigger_capture_unix_ns = 0;
     std::string trigger_output_time;
     std::string trigger_capture_time;
     std::string left_sensor_time;
     std::string left_host_time;
     std::string right_sensor_time;
     std::string right_host_time;
-};
-
-struct RealSenseTimes {
-    std::int64_t trigger_output_unix_ns;
     std::string color_sensor_time;
     std::string color_host_time;
     std::string depth_sensor_time;
     std::string depth_host_time;
+    bool left_done = false;
+    bool right_done = false;
+    bool rs_done = false;
+
+    bool ready() const
+    {
+        return left_done && right_done && rs_done;
+    }
 };
 
 std::mutex time_mutex;
-std::deque<GuideTimes> guide_time_queue;
-std::deque<RealSenseTimes> rs_time_queue;
+std::condition_variable time_cv;
+std::deque<TimeRow> time_rows;
+std::uint64_t next_time_row_id = 0;
 
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
@@ -88,21 +95,26 @@ public:
         }
     }
 
-    TriggerEvent take_guide_event()
+    bool take(TriggerEvent& trigger_event)
     {
-        return take_event(guide_queue_);
-    }
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [&] {
+            return !trigger_queue_.empty() || stopped_.load(std::memory_order_relaxed) || quitFlag.load();
+        });
 
-    TriggerEvent take_realsense_event()
-    {
-        return take_event(realsense_queue_);
+        if (trigger_queue_.empty()) {
+            return false;
+        }
+
+        trigger_event = trigger_queue_.front();
+        trigger_queue_.pop_front();
+        return true;
     }
 
     void clear()
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::deque<TriggerEvent>().swap(guide_queue_);
-        std::deque<TriggerEvent>().swap(realsense_queue_);
+        std::deque<TriggerEvent>().swap(trigger_queue_);
         cv_.notify_all();
     }
 
@@ -117,35 +129,18 @@ private:
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                push_locked(guide_queue_, trigger_event);
-                push_locked(realsense_queue_, trigger_event);
+                if (trigger_queue_.size() >= max_queue_size_) {
+                    std::cerr << "[trigger] trigger queue overflow: size="
+                              << trigger_queue_.size()
+                              << " max=" << max_queue_size_ << std::endl;
+                    quitFlag.store(true);
+                    cv_.notify_all();
+                    break;
+                }
+                trigger_queue_.push_back(trigger_event);
             }
-            cv_.notify_all();
+            cv_.notify_one();
         }
-    }
-
-    void push_locked(std::deque<TriggerEvent>& queue, const TriggerEvent& trigger_event)
-    {
-        queue.push_back(trigger_event);
-        while (queue.size() > max_queue_size_) {
-            queue.pop_front();
-        }
-    }
-
-    TriggerEvent take_event(std::deque<TriggerEvent>& queue)
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [&] {
-            return !queue.empty() || stopped_.load(std::memory_order_relaxed) || quitFlag.load();
-        });
-
-        if (queue.empty()) {
-            return {};
-        }
-
-        const TriggerEvent trigger_event = queue.front();
-        queue.pop_front();
-        return trigger_event;
     }
 
     SyncBridge& bridge_;
@@ -153,8 +148,7 @@ private:
     std::atomic<bool> stopped_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::deque<TriggerEvent> guide_queue_;
-    std::deque<TriggerEvent> realsense_queue_;
+    std::deque<TriggerEvent> trigger_queue_;
     std::thread worker_;
 };
 
@@ -176,64 +170,93 @@ bool output_enabled()
     return std::chrono::steady_clock::now() >= g_output_start_at;
 }
 
-void write_times(bool flush = false)
+void reset_time_rows_locked()
 {
-    while (!guide_time_queue.empty() || !rs_time_queue.empty()) {
-        if (guide_time_queue.empty()) {
-            if (!flush) return;
-            const RealSenseTimes rs_times = rs_time_queue.front();
-            rs_time_queue.pop_front();
-            time_stream << ",,,,,"
-                        << rs_times.color_sensor_time << ","
-                        << rs_times.color_host_time << ","
-                        << rs_times.depth_sensor_time << ","
-                        << rs_times.depth_host_time << "\n";
-            continue;
-        }
-        if (rs_time_queue.empty()) {
-            if (!flush) return;
-            const GuideTimes guide_times = guide_time_queue.front();
-            guide_time_queue.pop_front();
-            time_stream << guide_times.trigger_output_time << ","
-                        << guide_times.trigger_capture_time << ","
-                        << guide_times.left_sensor_time << ","
-                        << guide_times.left_host_time << ","
-                        << guide_times.right_sensor_time << ","
-                        << guide_times.right_host_time << ",,,,\n";
-            continue;
+    time_rows.clear();
+    next_time_row_id = 0;
+}
+
+void append_time_row(const TriggerEvent& trigger_event)
+{
+    std::lock_guard<std::mutex> lock(time_mutex);
+    TimeRow row{};
+    row.id = next_time_row_id++;
+    row.trigger_output_unix_ns = trigger_event.trigger_output_unix_ns;
+    row.trigger_capture_unix_ns = trigger_event.trigger_capture_unix_ns;
+    row.trigger_output_time = format_timestamp_ns(trigger_event.trigger_output_unix_ns);
+    row.trigger_capture_time = format_timestamp_ns(trigger_event.trigger_capture_unix_ns);
+    time_rows.push_back(std::move(row));
+    time_cv.notify_all();
+}
+
+TimeRow* row_for_cursor(std::uint64_t cursor_id)
+{
+    if (time_rows.empty()) {
+        return nullptr;
+    }
+    if (cursor_id < time_rows.front().id) {
+        return nullptr;
+    }
+
+    const std::uint64_t offset = cursor_id - time_rows.front().id;
+    if (offset >= time_rows.size()) {
+        return nullptr;
+    }
+    return &time_rows[static_cast<std::size_t>(offset)];
+}
+
+void write_time_row(const TimeRow& row)
+{
+    if (!if_save || !time_stream.is_open()) {
+        return;
+    }
+    time_stream << row.trigger_output_time << ","
+                << row.trigger_capture_time << ","
+                << row.left_sensor_time << ","
+                << row.left_host_time << ","
+                << row.right_sensor_time << ","
+                << row.right_host_time << ","
+                << row.color_sensor_time << ","
+                << row.color_host_time << ","
+                << row.depth_sensor_time << ","
+                << row.depth_host_time << "\n";
+}
+
+void flush_time_rows(bool final = false)
+{
+    std::vector<TimeRow> ready_rows;
+    {
+        std::lock_guard<std::mutex> lock(time_mutex);
+        if (final) {
+            for (auto& row : time_rows) {
+                if (!row.left_done) {
+                    row.left_done = true;
+                    row.left_sensor_time.clear();
+                    row.left_host_time.clear();
+                }
+                if (!row.right_done) {
+                    row.right_done = true;
+                    row.right_sensor_time.clear();
+                    row.right_host_time.clear();
+                }
+                if (!row.rs_done) {
+                    row.rs_done = true;
+                    row.color_sensor_time.clear();
+                    row.color_host_time.clear();
+                    row.depth_sensor_time.clear();
+                    row.depth_host_time.clear();
+                }
+            }
         }
 
-        const GuideTimes guide_times = guide_time_queue.front();
-        const RealSenseTimes rs_times = rs_time_queue.front();
-        if (guide_times.trigger_output_unix_ns == rs_times.trigger_output_unix_ns) {
-            guide_time_queue.pop_front();
-            rs_time_queue.pop_front();
-            time_stream << guide_times.trigger_output_time << ","
-                        << guide_times.trigger_capture_time << ","
-                        << guide_times.left_sensor_time << ","
-                        << guide_times.left_host_time << ","
-                        << guide_times.right_sensor_time << ","
-                        << guide_times.right_host_time << ","
-                        << rs_times.color_sensor_time << ","
-                        << rs_times.color_host_time << ","
-                        << rs_times.depth_sensor_time << ","
-                        << rs_times.depth_host_time << "\n";
-        } else if (guide_times.trigger_output_unix_ns < rs_times.trigger_output_unix_ns) {
-            guide_time_queue.pop_front();
-            time_stream << guide_times.trigger_output_time << ","
-                        << guide_times.trigger_capture_time << ","
-                        << guide_times.left_sensor_time << ","
-                        << guide_times.left_host_time << ","
-                        << guide_times.right_sensor_time << ","
-                        << guide_times.right_host_time << ",,,,\n";
-        } else {
-            rs_time_queue.pop_front();
-            time_stream << ",,,,,"
-                        << rs_times.color_sensor_time << ","
-                        << rs_times.color_host_time << ","
-                        << rs_times.depth_sensor_time << ","
-                        << rs_times.depth_host_time << "\n";
+        while (!time_rows.empty() && time_rows.front().ready()) {
+            ready_rows.push_back(std::move(time_rows.front()));
+            time_rows.pop_front();
         }
+    }
+
+    for (const auto& row : ready_rows) {
+        write_time_row(row);
     }
 }
 
@@ -308,38 +331,70 @@ bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::cond
     });
 }
 
-void stereo_consumer()
+TimeRow* wait_for_row_locked(std::unique_lock<std::mutex>& lock, std::uint64_t cursor_id, std::uint64_t seen_gen)
+{
+    while (!quitFlag.load()) {
+        if (g_warmup_gen.load(std::memory_order_acquire) != seen_gen) {
+            return nullptr;
+        }
+        if (TimeRow* row = row_for_cursor(cursor_id)) {
+            return row;
+        }
+        time_cv.wait(lock);
+    }
+    return nullptr;
+}
+
+void reset_capture_state()
+{
+    if (guides[0]) {
+        guides[0]->clear();
+    }
+    if (guides[1]) {
+        guides[1]->clear();
+    }
+    if (rs_prod) {
+        rs_prod->clear_rgbd();
+        rs_prod->reset_rgbd_tracking();
+    }
+    if (trigger_stamps) {
+        trigger_stamps->clear();
+    }
+    if (sync_bridge) {
+        sync_bridge->clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(time_mutex);
+        reset_time_rows_locked();
+    }
+    g_warmup_done.store(true, std::memory_order_release);
+    g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+    time_cv.notify_all();
+}
+
+void guide_consumer(int cam_id)
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
     bool skip_one = false;
+    std::uint64_t cursor_id = 0;
+    bool have_sequence = false;
+    std::uint32_t last_sequence = 0;
+
     while (!quitFlag.load()) {
-        GuideFrame left_frame;
-        GuideFrame right_frame;
-        if (!guides[0]->pop(left_frame)) break;
-        if (!guides[1]->pop(right_frame)) break;
+        GuideFrame frame;
+        if (!guides[cam_id]->pop(frame)) {
+            break;
+        }
 
         if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> lock(g_warmup_mutex);
             if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
-                guides[0]->clear();
-                guides[1]->clear();
-                if (rs_prod) {
-                    rs_prod->clear_rgbd();
-                }
-                if (trigger_stamps) {
-                    trigger_stamps->clear();
-                }
-                if (sync_bridge) {
-                    sync_bridge->clear();
-                }
-                {
-                    std::lock_guard<std::mutex> lock(time_mutex);
-                    guide_time_queue.clear();
-                    rs_time_queue.clear();
-                }
-                g_warmup_done.store(true, std::memory_order_release);
-                g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+                reset_capture_state();
                 seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                cursor_id = 0;
+                have_sequence = false;
+                last_sequence = 0;
+                skip_one = false;
                 continue;
             }
         }
@@ -347,6 +402,9 @@ void stereo_consumer()
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
+            cursor_id = 0;
+            have_sequence = false;
+            last_sequence = 0;
             skip_one = true;
         }
         if (skip_one) {
@@ -355,44 +413,91 @@ void stereo_consumer()
         }
 
         if (!output_enabled()) {
-            if (trigger_stamps) {
-                trigger_stamps->take_guide_event();
+            continue;
+        }
+
+        const bool is_left = cam_id == 0;
+        std::int64_t trigger_ns = 0;
+        bool assigned = false;
+        {
+            std::unique_lock<std::mutex> lock(time_mutex);
+            TimeRow* row = wait_for_row_locked(lock, cursor_id, seen_gen);
+            if (!row) {
+                continue;
             }
+
+            const std::uint32_t step = have_sequence && frame.sequence > last_sequence
+                ? frame.sequence - last_sequence
+                : 1U;
+            const std::uint32_t missing = step > 0 ? step - 1U : 0U;
+            bool missing_failed = false;
+            for (std::uint32_t i = 0; i < missing; ++i) {
+                row = wait_for_row_locked(lock, cursor_id, seen_gen);
+                if (!row) {
+                    missing_failed = true;
+                    break;
+                }
+                if (is_left) {
+                    row->left_sensor_time.clear();
+                    row->left_host_time.clear();
+                    row->left_done = true;
+                } else {
+                    row->right_sensor_time.clear();
+                    row->right_host_time.clear();
+                    row->right_done = true;
+                }
+                ++cursor_id;
+            }
+            if (missing_failed) {
+                continue;
+            }
+
+            row = wait_for_row_locked(lock, cursor_id, seen_gen);
+            if (!row) {
+                continue;
+            }
+
+            if (is_left) {
+                row->left_sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
+                row->left_host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
+                row->left_done = true;
+            } else {
+                row->right_sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
+                row->right_host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
+                row->right_done = true;
+            }
+            trigger_ns = row->trigger_output_unix_ns;
+            ++cursor_id;
+            have_sequence = true;
+            last_sequence = frame.sequence;
+            assigned = true;
+            time_cv.notify_all();
+        }
+
+        if (!assigned) {
             continue;
         }
 
-        const TriggerEvent trigger_event = trigger_stamps->take_guide_event();
-        if (trigger_event.trigger_output_unix_ns <= 0) {
-            continue;
-        }
-
-        left_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
-        right_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
-
+        flush_time_rows();
+        frame.trigger_unix_ns = trigger_ns;
         if (if_save) {
-            {
-                std::lock_guard<std::mutex> lock(time_mutex);
-                guide_time_queue.push_back({
-                    trigger_event.trigger_output_unix_ns,
-                    format_timestamp_ns(trigger_event.trigger_output_unix_ns),
-                    format_timestamp_ns(trigger_event.trigger_capture_unix_ns),
-                    format_timestamp_sec_usec_as_nsec(left_frame.sensor_sec, left_frame.sensor_microsec),
-                    format_timestamp_sec_nsec(left_frame.host_sec, left_frame.host_nanosec),
-                    format_timestamp_sec_usec_as_nsec(right_frame.sensor_sec, right_frame.sensor_microsec),
-                    format_timestamp_sec_nsec(right_frame.host_sec, right_frame.host_nanosec),
-                });
-                write_times();
-            }
-            guide_writers[0]->write(left_frame);
-            guide_writers[1]->write(right_frame);
+            guide_writers[cam_id]->write(frame);
         }
 
-        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.trigger_output_unix_ns));
-        publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", stamp);
-        publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", stamp);
+        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_ns));
+        publish_image(
+            g_guide_image_pubs[cam_id],
+            frame.gray_image,
+            "mono8",
+            is_left ? "guide_left" : "guide_right",
+            stamp);
         if (g_enable_guide_temperature) {
-            publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
-            publish_image(g_guide_temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", stamp);
+            publish_image(
+                g_guide_temp_pubs[cam_id],
+                frame.temperature_celsius,
+                "32FC1",
+                is_left ? "guide_left" : "guide_right",
+                stamp);
         }
     }
 
@@ -405,32 +510,21 @@ void realsense_consumer()
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
     bool skip_one = false;
-    while (!quitFlag.load()) {
-        StampedRealSenseFrame rs_frame;
-        if (!rs_prod->pop_rgbd(rs_frame)) break;
+    std::uint64_t cursor_id = 0;
+
+    for (;;) {
+        StampedRealSenseFrame frame;
+        if (!rs_prod->pop_rgbd(frame)) {
+            break;
+        }
 
         if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> lock(g_warmup_mutex);
             if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
-                guides[0]->clear();
-                guides[1]->clear();
-                if (rs_prod) {
-                    rs_prod->clear_rgbd();
-                }
-                if (trigger_stamps) {
-                    trigger_stamps->clear();
-                }
-                if (sync_bridge) {
-                    sync_bridge->clear();
-                }
-                {
-                    std::lock_guard<std::mutex> lock(time_mutex);
-                    guide_time_queue.clear();
-                    rs_time_queue.clear();
-                }
-                g_warmup_done.store(true, std::memory_order_release);
-                g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+                reset_capture_state();
                 seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                cursor_id = 0;
+                skip_one = false;
                 continue;
             }
         }
@@ -438,6 +532,7 @@ void realsense_consumer()
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
+            cursor_id = 0;
             skip_one = true;
         }
         if (skip_one) {
@@ -446,49 +541,107 @@ void realsense_consumer()
         }
 
         if (!output_enabled()) {
-            if (trigger_stamps) {
-                trigger_stamps->take_realsense_event();
+            continue;
+        }
+
+        std::int64_t trigger_ns = 0;
+        bool assigned = false;
+        {
+            std::unique_lock<std::mutex> lock(time_mutex);
+            TimeRow* row = wait_for_row_locked(lock, cursor_id, seen_gen);
+            if (!row) {
+                continue;
             }
+
+            const std::uint32_t step = std::max<std::uint32_t>(1U, frame.trigger_step);
+            const std::uint32_t missing = step - 1U;
+            bool missing_failed = false;
+            for (std::uint32_t i = 0; i < missing; ++i) {
+                row = wait_for_row_locked(lock, cursor_id, seen_gen);
+                if (!row) {
+                    missing_failed = true;
+                    break;
+                }
+                row->color_sensor_time.clear();
+                row->color_host_time.clear();
+                row->depth_sensor_time.clear();
+                row->depth_host_time.clear();
+                row->rs_done = true;
+                ++cursor_id;
+            }
+            if (missing_failed) {
+                continue;
+            }
+
+            row = wait_for_row_locked(lock, cursor_id, seen_gen);
+            if (!row) {
+                continue;
+            }
+
+            row->color_sensor_time = format_timestamp_ns(to_ns_from_sec_usec(
+                frame.color_sensor_sec,
+                frame.color_sensor_microsec));
+            row->color_host_time = format_timestamp_ns(to_ns_from_sec_nsec(
+                frame.color_host_sec,
+                frame.color_host_nanosec));
+            row->depth_sensor_time = format_timestamp_ns(to_ns_from_sec_usec(
+                frame.depth_sensor_sec,
+                frame.depth_sensor_microsec));
+            row->depth_host_time = format_timestamp_ns(to_ns_from_sec_nsec(
+                frame.depth_host_sec,
+                frame.depth_host_nanosec));
+            row->rs_done = true;
+            trigger_ns = row->trigger_output_unix_ns;
+            ++cursor_id;
+            assigned = true;
+            time_cv.notify_all();
+        }
+
+        if (!assigned) {
             continue;
         }
 
-        const TriggerEvent trigger_event = trigger_stamps->take_realsense_event();
-        if (trigger_event.trigger_output_unix_ns <= 0) {
-            continue;
-        }
-
-        rs_frame.trigger_unix_ns = trigger_event.trigger_output_unix_ns;
-
+        flush_time_rows();
+        frame.trigger_unix_ns = trigger_ns;
         if (if_save) {
-            {
-                std::lock_guard<std::mutex> lock(time_mutex);
-                const std::int64_t color_sensor_ns = to_ns_from_sec_usec(
-                    rs_frame.color_sensor_sec,
-                    rs_frame.color_sensor_microsec);
-                const std::int64_t color_host_ns = to_ns_from_sec_nsec(
-                    rs_frame.color_host_sec,
-                    rs_frame.color_host_nanosec);
-                const std::int64_t depth_sensor_ns = to_ns_from_sec_usec(
-                    rs_frame.depth_sensor_sec,
-                    rs_frame.depth_sensor_microsec);
-                const std::int64_t depth_host_ns = to_ns_from_sec_nsec(
-                    rs_frame.depth_host_sec,
-                    rs_frame.depth_host_nanosec);
-                rs_time_queue.push_back({
-                    trigger_event.trigger_output_unix_ns,
-                    format_timestamp_ns(color_sensor_ns),
-                    format_timestamp_ns(color_host_ns),
-                    format_timestamp_ns(depth_sensor_ns),
-                    format_timestamp_ns(depth_host_ns),
-                });
-                write_times();
-            }
-            rs_writer->write_rgbd(rs_frame);
+            rs_writer->write_rgbd(frame);
         }
 
-        const auto rs_stamp = make_time_ns(static_cast<uint64_t>(trigger_event.trigger_output_unix_ns));
-        publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", rs_stamp);
-        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
+        const auto rs_stamp = make_time_ns(static_cast<uint64_t>(trigger_ns));
+        publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", rs_stamp);
+        publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
+    }
+
+    if (!quitFlag.load()) {
+        stop_capture();
+    }
+}
+
+void trigger_consumer()
+{
+    std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    while (!quitFlag.load()) {
+        TriggerEvent trigger_event;
+        if (!trigger_stamps || !trigger_stamps->take(trigger_event)) {
+            break;
+        }
+
+        if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(g_warmup_mutex);
+            if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
+                reset_capture_state();
+                seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                continue;
+            }
+        }
+
+        const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
+        if (gen != seen_gen) {
+            seen_gen = gen;
+        }
+
+        append_time_row(trigger_event);
+        flush_time_rows();
     }
 
     if (!quitFlag.load()) {
@@ -671,6 +824,9 @@ int main(int argc, char **argv)
     g_output_start_at = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(0, warmup));
 
     std::vector<std::thread> consumers;
+    consumers.emplace_back(trigger_consumer);
+    consumers.emplace_back(guide_consumer, 0);
+    consumers.emplace_back(guide_consumer, 1);
     consumers.emplace_back(realsense_consumer);
     consumers.emplace_back(accel_consumer);
     consumers.emplace_back(gyro_consumer);
@@ -693,8 +849,6 @@ int main(int argc, char **argv)
         producers.emplace_back([i]() { guides[i]->run(); });
     }
 
-    consumers.emplace_back(stereo_consumer);
-
     Rate rate(100.0);
     while (ok() && !quitFlag.load()) {
         spin_once();
@@ -715,10 +869,7 @@ int main(int argc, char **argv)
     for (auto& t : producers) t.join();
     for (auto& t : consumers) t.join();
 
-    if (if_save) {
-        std::lock_guard<std::mutex> lock(time_mutex);
-        write_times(true);
-    }
+    flush_time_rows(true);
 
     shutdown();
     return EXIT_SUCCESS;

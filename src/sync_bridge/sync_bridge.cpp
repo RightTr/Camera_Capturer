@@ -339,10 +339,15 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
     const auto output_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
 
     std::lock_guard<std::mutex> lock(mutex_);
-    serial_stamp_queue_.push_back(output_ns);
-    while (serial_stamp_queue_.size() > config_.max_queue_size) {
-        serial_stamp_queue_.pop_front();
+    if (serial_stamp_queue_.size() >= config_.max_queue_size) {
+        std::fprintf(stderr, "SyncBridge serial queue overflow: size=%zu max=%zu\n",
+                     serial_stamp_queue_.size(),
+                     config_.max_queue_size);
+        running_.store(false, std::memory_order_relaxed);
+        cv_.notify_all();
+        return;
     }
+    serial_stamp_queue_.push_back(output_ns);
 
     while (!gpio_capture_queue_.empty() && !serial_stamp_queue_.empty()) {
         const std::int64_t output_ns = serial_stamp_queue_.front();
@@ -351,10 +356,15 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
         gpio_capture_queue_.pop_front();
 
         matched_count_.fetch_add(1, std::memory_order_relaxed);
-        trigger_event_queue_.push_back({output_ns, capture_ns});
-        while (trigger_event_queue_.size() > config_.max_queue_size) {
-            trigger_event_queue_.pop_front();
+        if (trigger_event_queue_.size() >= config_.max_queue_size) {
+            std::fprintf(stderr, "SyncBridge trigger queue overflow: size=%zu max=%zu\n",
+                         trigger_event_queue_.size(),
+                         config_.max_queue_size);
+            running_.store(false, std::memory_order_relaxed);
+            cv_.notify_all();
+            return;
         }
+        trigger_event_queue_.push_back({output_ns, capture_ns});
 
         cv_.notify_one();
     }
@@ -469,10 +479,15 @@ void SyncBridge::gpio_loop()
         StatsSnapshot stats_snapshot;
         bool print_stats = false;
         std::lock_guard<std::mutex> lock(mutex_);
-        gpio_capture_queue_.push_back(system_time_ns_now());
-        while (gpio_capture_queue_.size() > config_.max_queue_size) {
-            gpio_capture_queue_.pop_front();
+        if (gpio_capture_queue_.size() >= config_.max_queue_size) {
+            std::fprintf(stderr, "SyncBridge gpio queue overflow: size=%zu max=%zu\n",
+                         gpio_capture_queue_.size(),
+                         config_.max_queue_size);
+            running_.store(false, std::memory_order_relaxed);
+            cv_.notify_all();
+            return;
         }
+        gpio_capture_queue_.push_back(system_time_ns_now());
 
         while (!gpio_capture_queue_.empty() && !serial_stamp_queue_.empty()) {
             const std::int64_t output_ns = serial_stamp_queue_.front();
@@ -481,10 +496,15 @@ void SyncBridge::gpio_loop()
             gpio_capture_queue_.pop_front();
 
             matched_count_.fetch_add(1, std::memory_order_relaxed);
-            trigger_event_queue_.push_back({output_ns, capture_ns});
-            while (trigger_event_queue_.size() > config_.max_queue_size) {
-                trigger_event_queue_.pop_front();
+            if (trigger_event_queue_.size() >= config_.max_queue_size) {
+                std::fprintf(stderr, "SyncBridge trigger queue overflow: size=%zu max=%zu\n",
+                             trigger_event_queue_.size(),
+                             config_.max_queue_size);
+                running_.store(false, std::memory_order_relaxed);
+                cv_.notify_all();
+                return;
             }
+            trigger_event_queue_.push_back({output_ns, capture_ns});
 
             cv_.notify_one();
         }

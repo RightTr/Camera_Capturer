@@ -172,6 +172,14 @@ void RealSenseProducer::set_imu_queue_size(int imu_max)
     imu_max_ = imu_max;
 }
 
+void RealSenseProducer::reset_rgbd_tracking()
+{
+    std::lock_guard<std::mutex> lock(rgb_state_mutex_);
+    last_color_frame_number_ = 0;
+    last_depth_frame_number_ = 0;
+    rgbd_tracking_initialized_ = false;
+}
+
 bool RealSenseProducer::live() const
 {
     return !stopped_.load(std::memory_order_relaxed) && (!running_ || running_());
@@ -447,8 +455,6 @@ void RealSenseProducer::run()
         spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
-    std::uint64_t last_color_frame_number = 0;
-    std::uint64_t last_depth_frame_number = 0;
     try {
         rs2::pipeline_profile profile = pipeline.start(cfg);
         if (on_start_) on_start_(profile);
@@ -536,25 +542,36 @@ void RealSenseProducer::run()
         cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
         cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
 
+        std::uint64_t last_color_frame_number = 0;
+        std::uint64_t last_depth_frame_number = 0;
+        bool tracking_initialized = false;
+        {
+            std::lock_guard<std::mutex> lock(rgb_state_mutex_);
+            last_color_frame_number = last_color_frame_number_;
+            last_depth_frame_number = last_depth_frame_number_;
+            tracking_initialized = rgbd_tracking_initialized_;
+        }
+
         const bool new_color = color_frame_number > last_color_frame_number;
         const bool new_depth = depth_frame_number > last_depth_frame_number;
-
-        if (new_color) {
-            last_color_frame_number = color_frame_number;
-        }
-        if (new_depth) {
-            last_depth_frame_number = depth_frame_number;
-        }
-
         if (!new_color || !new_depth) {
             continue;
         }
+
+        const std::uint32_t trigger_step = tracking_initialized
+            ? static_cast<std::uint32_t>(std::max<std::uint64_t>(
+                  1ULL,
+                  std::max(
+                      color_frame_number - last_color_frame_number,
+                      depth_frame_number - last_depth_frame_number)))
+            : 1U;
 
         if (!push_rgbd(StampedRealSenseFrame{
                 rgb.clone(),
                 depth.clone(),
                 color_frame_number,
                 depth_frame_number,
+                trigger_step,
                 color_host_s.count(),
                 color_host_ns,
                 color_sensor_sec,
@@ -564,6 +581,13 @@ void RealSenseProducer::run()
                 depth_sensor_sec,
                 depth_sensor_usec})) {
             break;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(rgb_state_mutex_);
+            last_color_frame_number_ = color_frame_number;
+            last_depth_frame_number_ = depth_frame_number;
+            rgbd_tracking_initialized_ = true;
         }
     }
 

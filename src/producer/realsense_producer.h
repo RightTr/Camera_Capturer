@@ -16,6 +16,7 @@ struct StampedRealSenseFrame {
     cv::Mat depth_image_raw;
     std::uint64_t color_frame_number;
     std::uint64_t depth_frame_number;
+    std::uint32_t trigger_step = 1;
     long color_host_sec;
     long color_host_nanosec;
     long color_sensor_sec;
@@ -57,6 +58,7 @@ public:
     void set_filter_enabled(bool filter);
     void set_rgbd_queue_size(int rgbd_max);
     void set_imu_queue_size(int imu_max);
+    void reset_rgbd_tracking();
 
     void run();
     bool pop_rgbd(StampedRealSenseFrame& frame);
@@ -88,6 +90,7 @@ private:
     std::function<void(double)> on_scale_;
 
     mutable std::mutex rgb_mutex_;
+    mutable std::mutex rgb_state_mutex_;
     mutable std::mutex accel_mutex_;
     mutable std::mutex gyro_mutex_;
     mutable std::mutex imu_save_mutex_;
@@ -100,4 +103,7 @@ private:
     std::queue<StampedImuFrame> gyro_queue_;
     std::queue<StampedImuFrame> imu_save_queue_;
     std::atomic<bool> stopped_{false};
+    std::uint64_t last_color_frame_number_ = 0;
+    std::uint64_t last_depth_frame_number_ = 0;
+    bool rgbd_tracking_initialized_ = false;
 };

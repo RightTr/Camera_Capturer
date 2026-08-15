@@ -323,6 +323,7 @@ void GuideProducer::run()
         if (now - last > min_dt) {
             GuideFrame frame{};
             frame.cam_id = cam_id_;
+            frame.sequence = buf.sequence;
             frame.sensor_sec = buf.timestamp.tv_sec;
             frame.sensor_microsec = buf.timestamp.tv_usec;
 

@@ -75,6 +75,7 @@ struct GuideFrame {
     cv::Mat gray_image;
     cv::Mat temperature_celsius;
     ParamData param_data;
+    std::uint32_t sequence = 0;
     long host_sec;
     long host_nanosec;
     long sensor_sec;
