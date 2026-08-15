@@ -10,6 +10,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -210,16 +211,20 @@ void write_time_row(const TimeRow& row)
     if (!if_save || !time_stream.is_open()) {
         return;
     }
-    time_stream << row.trigger_output_time << ","
-                << row.trigger_capture_time << ","
-                << row.left_sensor_time << ","
-                << row.left_host_time << ","
-                << row.right_sensor_time << ","
-                << row.right_host_time << ","
-                << row.color_sensor_time << ","
-                << row.color_host_time << ","
-                << row.depth_sensor_time << ","
-                << row.depth_host_time << "\n";
+    std::ostringstream ss;
+    ss << row.trigger_output_time << ","
+       << row.trigger_capture_time << ","
+       << row.left_sensor_time << ","
+       << row.left_host_time << ","
+       << row.right_sensor_time << ","
+       << row.right_host_time << ","
+       << row.color_sensor_time << ","
+       << row.color_host_time << ","
+       << row.depth_sensor_time << ","
+       << row.depth_host_time << "\n";
+
+    const std::string line = ss.str();
+    time_stream.write(line.data(), static_cast<std::streamsize>(line.size()));
 }
 
 void flush_time_rows(bool final = false)
@@ -870,6 +875,9 @@ int main(int argc, char **argv)
     for (auto& t : consumers) t.join();
 
     flush_time_rows(true);
+    if (time_stream.is_open()) {
+        time_stream.flush();
+    }
 
     shutdown();
     return EXIT_SUCCESS;
