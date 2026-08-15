@@ -29,6 +29,7 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 int if_save = 0;
 int rs_sync_mode = 0;
+bool g_enable_guide_temperature = true;
 
 std::atomic<bool> quitFlag(false);
 
@@ -389,7 +390,7 @@ void stereo_consumer()
         const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_event.trigger_output_unix_ns));
         publish_image(g_guide_image_pubs[0], left_frame.gray_image, "mono8", "guide_left", stamp);
         publish_image(g_guide_image_pubs[1], right_frame.gray_image, "mono8", "guide_right", stamp);
-        if (enable_guide_temperature) {
+        if (g_enable_guide_temperature) {
             publish_image(g_guide_temp_pubs[0], left_frame.temperature_celsius, "32FC1", "guide_left", stamp);
             publish_image(g_guide_temp_pubs[1], right_frame.temperature_celsius, "32FC1", "guide_right", stamp);
         }
@@ -558,7 +559,7 @@ int main(int argc, char **argv)
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string trigger_line = get_param<std::string>("trigger_line", "PAA.00");
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
-    const bool enable_guide_temperature = get_param<bool>("enable_guide_temperature", true);
+    g_enable_guide_temperature = get_param<bool>("enable_guide_temperature", true);
 
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
@@ -594,7 +595,7 @@ int main(int argc, char **argv)
     }
     for (auto& guide : guides) {
         guide->set_tenfold_celsius(false);
-        guide->set_temperature_enabled(enable_guide_temperature);
+        guide->set_temperature_enabled(g_enable_guide_temperature);
         guide->set_serial_query_time(guide_query_ms);
     }
 
