@@ -10,28 +10,6 @@
 #include <thread>
 #include <utility>
 
-namespace {
-
-struct CachedColorFrame {
-    cv::Mat image;
-    uint64_t frame_number;
-    long host_sec;
-    long host_nanosec;
-    long sensor_sec;
-    long sensor_usec;
-};
-
-struct CachedDepthFrame {
-    cv::Mat image;
-    uint64_t frame_number;
-    long host_sec;
-    long host_nanosec;
-    long sensor_sec;
-    long sensor_usec;
-};
-
-}  // namespace
-
 bool RealSenseProducer::configure_sync(rs2::depth_sensor& depth_sensor, int sync_mode)
 {
     if (!depth_sensor.supports(RS2_OPTION_INTER_CAM_SYNC_MODE)) {
@@ -469,19 +447,10 @@ void RealSenseProducer::run()
         spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
-    rs2::frame_queue frame_queue(std::max(rgbd_max_ * 2, 60));
-    std::deque<CachedColorFrame> color_queue;
-    std::deque<CachedDepthFrame> depth_queue;
     std::uint64_t last_color_frame_number = 0;
     std::uint64_t last_depth_frame_number = 0;
-    bool has_color_base = false;
-    bool has_depth_base = false;
-    std::uint64_t color_base_frame_number = 0;
-    std::uint64_t depth_base_frame_number = 0;
     try {
-        rs2::pipeline_profile profile = pipeline.start(cfg, [&](const rs2::frame& frame) {
-            frame_queue.enqueue(frame);
-        });
+        rs2::pipeline_profile profile = pipeline.start(cfg);
         if (on_start_) on_start_(profile);
 
         rs2::device live_dev = profile.get_device();
@@ -519,12 +488,8 @@ void RealSenseProducer::run()
     }
 
     while (live()) {
-        rs2::frame frame;
-        if (!frame_queue.try_wait_for_frame(&frame, 100)) {
-            continue;
-        }
-        rs2::frameset frameset = frame.as<rs2::frameset>();
-        if (!frameset) {
+        rs2::frameset frameset;
+        if (!pipeline.poll_for_frames(&frameset)) {
             continue;
         }
 
@@ -571,75 +536,33 @@ void RealSenseProducer::run()
         cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
         cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
 
-        if (!has_color_base) {
-            color_base_frame_number = color_frame_number;
-            has_color_base = true;
+        const bool new_color = color_frame_number > last_color_frame_number;
+        const bool new_depth = depth_frame_number > last_depth_frame_number;
+
+        if (new_color) {
+            last_color_frame_number = color_frame_number;
         }
-        if (!has_depth_base) {
-            depth_base_frame_number = depth_frame_number;
-            has_depth_base = true;
+        if (new_depth) {
+            last_depth_frame_number = depth_frame_number;
         }
 
-        if (color_frame_number > last_color_frame_number) {
-            last_color_frame_number = color_frame_number;
-            color_queue.push_back(CachedColorFrame{
+        if (!new_color || !new_depth) {
+            continue;
+        }
+
+        if (!push_rgbd(StampedRealSenseFrame{
                 rgb.clone(),
+                depth.clone(),
                 color_frame_number,
+                depth_frame_number,
                 color_host_s.count(),
                 color_host_ns,
                 color_sensor_sec,
                 color_sensor_usec,
-            });
-        }
-
-        if (depth_frame_number > last_depth_frame_number) {
-            last_depth_frame_number = depth_frame_number;
-            depth_queue.push_back(CachedDepthFrame{
-                depth.clone(),
-                depth_frame_number,
                 depth_host_s.count(),
                 depth_host_ns,
                 depth_sensor_sec,
-                depth_sensor_usec,
-            });
-        }
-
-        bool push_failed = false;
-        while (live() && !color_queue.empty() && !depth_queue.empty()) {
-            const std::uint64_t color_rel =
-                color_queue.front().frame_number - color_base_frame_number;
-            const std::uint64_t depth_rel =
-                depth_queue.front().frame_number - depth_base_frame_number;
-
-            if (color_rel == depth_rel) {
-                CachedColorFrame color = std::move(color_queue.front());
-                CachedDepthFrame depth_frame = std::move(depth_queue.front());
-                color_queue.pop_front();
-                depth_queue.pop_front();
-
-                if (!push_rgbd(StampedRealSenseFrame{
-                        std::move(color.image),
-                        std::move(depth_frame.image),
-                        color.frame_number,
-                        depth_frame.frame_number,
-                        color.host_sec,
-                        color.host_nanosec,
-                        color.sensor_sec,
-                        color.sensor_usec,
-                        depth_frame.host_sec,
-                        depth_frame.host_nanosec,
-                        depth_frame.sensor_sec,
-                        depth_frame.sensor_usec})) {
-                    push_failed = true;
-                    break;
-                }
-            } else if (color_rel < depth_rel) {
-                color_queue.pop_front();
-            } else {
-                depth_queue.pop_front();
-            }
-        }
-        if (push_failed) {
+                depth_sensor_usec})) {
             break;
         }
     }
