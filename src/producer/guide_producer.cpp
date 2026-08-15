@@ -223,6 +223,11 @@ void GuideProducer::set_tenfold_celsius(bool tenfold_celsius)
     tenfold_celsius_ = tenfold_celsius;
 }
 
+void GuideProducer::set_temperature_enabled(bool enabled)
+{
+    temperature_enabled_ = enabled;
+}
+
 void GuideProducer::set_max_queue_size(int max_size)
 {
     max_size_ = max_size;
@@ -324,7 +329,9 @@ void GuideProducer::run()
             cv::Mat raw(kHeight, kWidth * 2, CV_8UC2, buffers_[buf.index].start);
             frame.param_data.parse(static_cast<char*>(buffers_[buf.index].start) + kParamOffset);
             cv::cvtColor(raw(cv::Rect(kWidth, 0, kWidth, kHeight)), frame.gray_image, cv::COLOR_YUV2GRAY_YUY2);
-            frame.temperature_celsius = temp_mat(raw(cv::Rect(0, 0, kWidth, kHeight)), tenfold_celsius_);
+            if (temperature_enabled_) {
+                frame.temperature_celsius = temp_mat(raw(cv::Rect(0, 0, kWidth, kHeight)), tenfold_celsius_);
+            }
 
             const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
             frame.host_sec = sec.count();

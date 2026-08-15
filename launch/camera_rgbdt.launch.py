@@ -64,7 +64,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "use_rviz",
-            default_value="true",
+            default_value="false",
             description="Launch RViz with the packaged rgbdt.rviz config.",
         ),
         Node(

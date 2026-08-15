@@ -40,6 +40,15 @@ public:
     void clear();
 
 private:
+    struct StatsSnapshot {
+        std::uint64_t pwm_count = 0;
+        std::uint64_t serial_count = 0;
+        std::uint64_t matched_count = 0;
+        std::size_t serial_queue_size = 0;
+        std::size_t gpio_queue_size = 0;
+        std::size_t trigger_queue_size = 0;
+    };
+
     void serial_loop();
     void gpio_loop();
     bool send_control_request(unsigned char cmd,
@@ -47,12 +56,14 @@ private:
                               unsigned char expected_cmd);
     void handle_serial_frame(unsigned char cmd,
                              const std::vector<unsigned char>& payload);
+    bool stats_locked(StatsSnapshot& snapshot);
 
     Config config_;
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> pwm_count_{0};
     std::atomic<std::uint64_t> serial_count_{0};
     std::atomic<std::uint64_t> matched_count_{0};
+    std::uint64_t last_print_count_{0};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::int64_t> serial_stamp_queue_;

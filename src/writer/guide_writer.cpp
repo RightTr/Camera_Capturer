@@ -74,7 +74,7 @@ void GuideWriter::write(const GuideFrame& frame)
         ? frame.trigger_unix_ns
         : sensor_ns;
     time_stream_ << format_timestamp_ns(sensor_ns) << ","
-                 << format_timestamp_ns(host_ns) << std::endl;
+                 << format_timestamp_ns(host_ns) << '\n';
 
     param_stream_ << frame.host_sec << "." << std::setw(9) << std::setfill('0') << frame.host_nanosec
                   << "," << frame.param_data.humidity
@@ -92,7 +92,7 @@ void GuideWriter::write(const GuideFrame& frame)
                   << "," << frame.param_data.mark_y
                   << "," << frame.param_data.mark_temp
                   << "," << frame.param_data.region_avg_temp
-                  << std::endl;
+                  << '\n';
 
     if (save_images_) {
         std::ostringstream ss;
@@ -100,11 +100,13 @@ void GuideWriter::write(const GuideFrame& frame)
            << format_timestamp_ns(stamp_ns) << ".png";
         cv::imwrite(ss.str(), frame.gray_image);
 
-        ss.str("");
-        ss.clear();
-        ss << output_dir_ << "/" << camera_name_ << "/temperature/"
-           << format_timestamp_ns(stamp_ns) << ".png";
-        save_temperature_png(frame.temperature_celsius, ss.str());
+        if (!frame.temperature_celsius.empty()) {
+            ss.str("");
+            ss.clear();
+            ss << output_dir_ << "/" << camera_name_ << "/temperature/"
+               << format_timestamp_ns(stamp_ns) << ".png";
+            save_temperature_png(frame.temperature_celsius, ss.str());
+        }
     }
 }
 

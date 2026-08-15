@@ -200,6 +200,23 @@ void SyncBridge::clear()
     cv_.notify_all();
 }
 
+bool SyncBridge::stats_locked(StatsSnapshot& snapshot)
+{
+    const std::uint64_t matched_count = matched_count_.load(std::memory_order_relaxed);
+    if (matched_count < last_print_count_ + 300) {
+        return false;
+    }
+
+    last_print_count_ = (matched_count / 300) * 300;
+    snapshot.pwm_count = pwm_count_.load(std::memory_order_relaxed);
+    snapshot.serial_count = serial_count_.load(std::memory_order_relaxed);
+    snapshot.matched_count = matched_count;
+    snapshot.serial_queue_size = serial_stamp_queue_.size();
+    snapshot.gpio_queue_size = gpio_capture_queue_.size();
+    snapshot.trigger_queue_size = trigger_event_queue_.size();
+    return true;
+}
+
 bool SyncBridge::send_control_request(unsigned char cmd,
                                       const std::vector<unsigned char>& payload,
                                       unsigned char expected_cmd)
@@ -448,7 +465,9 @@ void SyncBridge::gpio_loop()
             continue;
         }
 
-        const auto pwm_count = pwm_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+        pwm_count_.fetch_add(1, std::memory_order_relaxed);
+        StatsSnapshot stats_snapshot;
+        bool print_stats = false;
         std::lock_guard<std::mutex> lock(mutex_);
         gpio_capture_queue_.push_back(system_time_ns_now());
         while (gpio_capture_queue_.size() > config_.max_queue_size) {
@@ -474,15 +493,17 @@ void SyncBridge::gpio_loop()
             cv_.notify_one();
         }
 
-        if (pwm_count % 300 == 0) {
-            const auto serial_count = serial_count_.load(std::memory_order_relaxed);
-            const auto matched_count = matched_count_.load(std::memory_order_relaxed);
-            const auto diff = static_cast<std::int64_t>(pwm_count) -
-                              static_cast<std::int64_t>(serial_count);
-            std::printf("[sync] pwm=%llu serial=%llu matched=%llu diff=%lld\n",
-                        static_cast<unsigned long long>(pwm_count),
-                        static_cast<unsigned long long>(serial_count),
-                        static_cast<unsigned long long>(matched_count),
+        print_stats = stats_locked(stats_snapshot);
+        if (print_stats) {
+            const auto diff = static_cast<std::int64_t>(stats_snapshot.pwm_count) -
+                              static_cast<std::int64_t>(stats_snapshot.serial_count);
+            std::printf("[sync] pwm=%llu serial=%llu matched=%llu serial_q=%zu gpio_q=%zu trigger_q=%zu diff=%lld\n",
+                        static_cast<unsigned long long>(stats_snapshot.pwm_count),
+                        static_cast<unsigned long long>(stats_snapshot.serial_count),
+                        static_cast<unsigned long long>(stats_snapshot.matched_count),
+                        stats_snapshot.serial_queue_size,
+                        stats_snapshot.gpio_queue_size,
+                        stats_snapshot.trigger_queue_size,
                         static_cast<long long>(diff));
         }
     }

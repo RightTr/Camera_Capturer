@@ -118,6 +118,7 @@ public:
     ~GuideProducer();
 
     void set_tenfold_celsius(bool tenfold_celsius);
+    void set_temperature_enabled(bool enabled);
     void set_max_queue_size(int max_size);
     void set_serial_query_time(int interval_ms);
     void run();
@@ -147,6 +148,7 @@ private:
     GuideBuffer* buffers_;
     unsigned int buffer_count_ = 4;
     bool tenfold_celsius_ = false;
+    bool temperature_enabled_ = true;
     int max_size_ = 5;
     int serial_query_interval_ms_ = 100;
     std::function<bool()> running_;

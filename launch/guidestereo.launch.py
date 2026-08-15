@@ -20,7 +20,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "use_rviz",
-            default_value="true",
+            default_value="false",
             description="Launch RViz with the packaged stereo.rviz config.",
         ),
         DeclareLaunchArgument(

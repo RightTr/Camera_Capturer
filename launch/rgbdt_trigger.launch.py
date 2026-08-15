@@ -4,6 +4,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -20,6 +21,7 @@ def generate_launch_description():
     serial_baud = LaunchConfiguration("serial_baud")
     trigger_line = LaunchConfiguration("trigger_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
+    enable_guide_temperature = LaunchConfiguration("enable_guide_temperature")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -87,8 +89,13 @@ def generate_launch_description():
             description="Maximum unmatched GPIO/serial sync events kept for FIFO pairing.",
         ),
         DeclareLaunchArgument(
-            "use_rviz",
+            "enable_guide_temperature",
             default_value="true",
+            description="Enable Guide temperature conversion and temperature topic publishing.",
+        ),
+        DeclareLaunchArgument(
+            "use_rviz",
+            default_value="false",
             description="Launch RViz with the packaged rgbdt.rviz config.",
         ),
         Node(
@@ -109,6 +116,7 @@ def generate_launch_description():
                 "serial_baud": serial_baud,
                 "trigger_line": trigger_line,
                 "sync_queue_size": sync_queue_size,
+                "enable_guide_temperature": ParameterValue(enable_guide_temperature, value_type=bool),
             }],
         ),
         Node(
