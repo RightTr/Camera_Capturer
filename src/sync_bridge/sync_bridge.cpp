@@ -127,6 +127,35 @@ void SyncBridge::stop()
         gpio_worker_.join();
     }
 
+    std::size_t serial_queue_size = 0;
+    std::size_t gpio_queue_size = 0;
+    std::size_t trigger_queue_size = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        serial_queue_size = serial_stamp_queue_.size();
+        gpio_queue_size = gpio_capture_queue_.size();
+        trigger_queue_size = trigger_event_queue_.size();
+    }
+
+    const auto pwm_count = pwm_count_.load(std::memory_order_relaxed);
+    const auto serial_count = serial_count_.load(std::memory_order_relaxed);
+    const auto matched_count = matched_count_.load(std::memory_order_relaxed);
+    const auto diff = static_cast<std::int64_t>(pwm_count) -
+                      static_cast<std::int64_t>(serial_count);
+    std::printf("[Sync Summary]\n");
+    std::printf("PWM     : %llu\n",
+                static_cast<unsigned long long>(pwm_count));
+    std::printf("Serial  : %llu\n",
+                static_cast<unsigned long long>(serial_count));
+    std::printf("Matched : %llu\n",
+                static_cast<unsigned long long>(matched_count));
+    std::printf("Diff    : %lld\n",
+                static_cast<long long>(diff));
+    std::printf("Queues  : serial=%zu gpio=%zu trigger=%zu\n",
+                serial_queue_size,
+                gpio_queue_size,
+                trigger_queue_size);
+
     send_control_request(kSetMasterStreamCmd, {0}, kSetMasterStreamCmd);
     if (gpio_line_) {
         gpiod_line_release(gpio_line_);
@@ -149,7 +178,7 @@ void SyncBridge::stop()
 TriggerEvent SyncBridge::take_trigger_event()
 {
     std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait_for(lock, std::chrono::milliseconds(20), [&] {
+    cv_.wait(lock, [&] {
         return !trigger_event_queue_.empty() || !running_.load(std::memory_order_relaxed);
     });
 
@@ -288,6 +317,7 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
         return;
     }
 
+    serial_count_.fetch_add(1, std::memory_order_relaxed);
     const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
     const auto output_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
 
@@ -303,15 +333,12 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
         serial_stamp_queue_.pop_front();
         gpio_capture_queue_.pop_front();
 
+        matched_count_.fetch_add(1, std::memory_order_relaxed);
         trigger_event_queue_.push_back({output_ns, capture_ns});
         while (trigger_event_queue_.size() > config_.max_queue_size) {
             trigger_event_queue_.pop_front();
         }
 
-        std::printf("Trigger matched on %s: output=%s, capture=%s\n",
-                    config_.trigger_line.c_str(),
-                    format_timestamp_ns(output_ns).c_str(),
-                    format_timestamp_ns(capture_ns).c_str());
         cv_.notify_one();
     }
 }
@@ -421,6 +448,7 @@ void SyncBridge::gpio_loop()
             continue;
         }
 
+        const auto pwm_count = pwm_count_.fetch_add(1, std::memory_order_relaxed) + 1;
         std::lock_guard<std::mutex> lock(mutex_);
         gpio_capture_queue_.push_back(system_time_ns_now());
         while (gpio_capture_queue_.size() > config_.max_queue_size) {
@@ -443,6 +471,18 @@ void SyncBridge::gpio_loop()
                         format_timestamp_ns(output_ns).c_str(),
                         format_timestamp_ns(capture_ns).c_str());
             cv_.notify_one();
+        }
+
+        if (pwm_count % 300 == 0) {
+            const auto serial_count = serial_count_.load(std::memory_order_relaxed);
+            const auto matched_count = matched_count_.load(std::memory_order_relaxed);
+            const auto diff = static_cast<std::int64_t>(pwm_count) -
+                              static_cast<std::int64_t>(serial_count);
+            std::printf("[sync] pwm=%llu serial=%llu matched=%llu diff=%lld\n",
+                        static_cast<unsigned long long>(pwm_count),
+                        static_cast<unsigned long long>(serial_count),
+                        static_cast<unsigned long long>(matched_count),
+                        static_cast<long long>(diff));
         }
     }
 }

@@ -50,6 +50,9 @@ private:
 
     Config config_;
     std::atomic<bool> running_{false};
+    std::atomic<std::uint64_t> pwm_count_{0};
+    std::atomic<std::uint64_t> serial_count_{0};
+    std::atomic<std::uint64_t> matched_count_{0};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::int64_t> serial_stamp_queue_;

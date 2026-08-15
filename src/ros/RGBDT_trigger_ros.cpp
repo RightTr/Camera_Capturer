@@ -134,7 +134,7 @@ private:
     TriggerEvent take_event(std::deque<TriggerEvent>& queue)
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait_for(lock, std::chrono::milliseconds(20), [&] {
+        cv_.wait(lock, [&] {
             return !queue.empty() || stopped_.load(std::memory_order_relaxed) || quitFlag.load();
         });
 

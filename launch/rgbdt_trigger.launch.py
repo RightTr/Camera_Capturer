@@ -68,7 +68,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "serial_port",
-            default_value="/dev/ttyCH341USB0",
+            default_value="/dev/ttyUSB0",
             description="Serial port that receives board-provided PWM edge Unix timestamps in ns.",
         ),
         DeclareLaunchArgument(
