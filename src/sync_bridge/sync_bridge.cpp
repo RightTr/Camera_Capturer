@@ -461,6 +461,7 @@ void SyncBridge::gpio_loop()
             serial_stamp_queue_.pop_front();
             gpio_capture_queue_.pop_front();
 
+            matched_count_.fetch_add(1, std::memory_order_relaxed);
             trigger_event_queue_.push_back({output_ns, capture_ns});
             while (trigger_event_queue_.size() > config_.max_queue_size) {
                 trigger_event_queue_.pop_front();
