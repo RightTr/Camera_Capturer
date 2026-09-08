@@ -1,6 +1,5 @@
 #include "guide_producer.h"
 
-#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -25,9 +24,9 @@ constexpr int kWidth = 640;
 constexpr int kHeight = 512;
 constexpr int kParamOffset = 512 * 1280 * 2;
 constexpr int kGuideFps = 30;
-constexpr std::size_t kQueryResponseSize = 24;
-constexpr std::size_t kFocalTempHighIndex = 10;
-constexpr std::size_t kFocalTempLowIndex = 11;
+constexpr std::size_t kQueryPayloadSize = 22;
+constexpr std::size_t kFocalTempHighIndex = 9;
+constexpr std::size_t kFocalTempLowIndex = 10;
 
 uint16_t be16(const char* p)
 {
@@ -544,43 +543,38 @@ void GuideProducer::serial_worker() {
             case GuideProducer::SerialCmd::QUERY: {
                 serial_.Write(query_cmd);
 
-                std::array<unsigned char, kQueryResponseSize> response{};
-                std::size_t header_size = 0;
-                while (live() && header_size < 2) {
-                    unsigned char byte = 0;
-                    serial_.ReadByte(byte, 100);
-                    if (header_size == 0) {
-                        if (byte == 0x55) {
-                            response[0] = byte;
-                            header_size = 1;
-                        }
-                    } else if (byte == 0xAA) {
-                        response[1] = byte;
-                        header_size = 2;
-                    } else {
-                        if (byte == 0x55) {
-                            response[0] = byte;
-                            header_size = 1;
-                        } else {
-                            header_size = 0;
-                        }
+                unsigned char byte = 0;
+                while (live()) {
+                    serial_.ReadByte(byte, 10);
+                    if (byte == 0x55) {
+                        break;
                     }
                 }
                 if (!live()) break;
 
-                for (std::size_t i = 2; i < response.size(); ++i) {
-                    serial_.ReadByte(response[i], 100);
-                    if (!live()) break;
+                std::vector<unsigned char> payload;
+                payload.reserve(kQueryPayloadSize);
+                while (live()) {
+                    serial_.ReadByte(byte, 10);
+                    if (byte == 0xF0) {
+                        break;
+                    }
+                    payload.push_back(byte);
+                    if (payload.size() > kQueryPayloadSize) {
+                        break;
+                    }
                 }
                 if (!live()) break;
-                if (response.back() != 0xF0) {
+                if (byte != 0xF0 ||
+                    payload.size() != kQueryPayloadSize ||
+                    payload.front() != 0xAA) {
                     break;
                 }
 
                 const auto now = std::chrono::system_clock::now();
                 const uint16_t focal_temp =
-                    (static_cast<uint16_t>(response[kFocalTempHighIndex]) << 8) |
-                    static_cast<uint16_t>(response[kFocalTempLowIndex]);
+                    (static_cast<uint16_t>(payload[kFocalTempHighIndex]) << 8) |
+                    static_cast<uint16_t>(payload[kFocalTempLowIndex]);
                 const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
                 const auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
                 const auto host_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
