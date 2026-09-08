@@ -238,6 +238,20 @@ inline Publisher<MsgT> advertise(const std::string &topic, uint32_t queue_size)
 #endif
 }
 
+template <typename MsgT>
+inline Publisher<MsgT> advertise_sensor(
+    const std::string &topic,
+    uint32_t queue_size = 1)
+{
+#ifdef USE_ROS1
+    return node()->advertise<MsgT>(topic, queue_size);
+#elif defined(USE_ROS2)
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(queue_size));
+    qos.best_effort();
+    return node()->create_publisher<MsgT>(topic, qos);
+#endif
+}
+
 template <typename MsgT, typename Callback>
 inline Subscription<MsgT> subscribe(const std::string &topic, uint32_t queue_size, Callback cb)
 {
