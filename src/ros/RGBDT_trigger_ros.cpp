@@ -69,11 +69,6 @@ std::condition_variable time_cv;
 std::deque<TimeRow> time_rows;
 std::uint64_t next_time_row_id = 0;
 
-std::mutex trigger_mutex;
-std::condition_variable trigger_cv;
-std::deque<TriggerEvent> trigger_history;
-constexpr std::size_t kTriggerHistorySize = 120;
-
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
 std::unique_ptr<SyncBridge> sync_bridge;
@@ -177,82 +172,6 @@ std::mutex g_warmup_mutex;
 bool output_enabled()
 {
     return std::chrono::steady_clock::now() >= g_output_start_at;
-}
-
-void append_trigger_history(const TriggerEvent& trigger_event)
-{
-    if (trigger_event.trigger_capture_unix_ns <= 0 ||
-        trigger_event.trigger_output_unix_ns <= 0) {
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(trigger_mutex);
-        if (!trigger_history.empty()) {
-            const std::int64_t last_capture_ns =
-                trigger_history.back().trigger_capture_unix_ns;
-            if (trigger_event.trigger_capture_unix_ns == last_capture_ns) {
-                return;
-            }
-            if (trigger_event.trigger_capture_unix_ns < last_capture_ns) {
-                trigger_history.clear();
-            }
-        }
-        trigger_history.push_back(trigger_event);
-        while (trigger_history.size() > kTriggerHistorySize) {
-            trigger_history.pop_front();
-        }
-    }
-    trigger_cv.notify_all();
-}
-
-void clear_trigger_history()
-{
-    {
-        std::lock_guard<std::mutex> lock(trigger_mutex);
-        trigger_history.clear();
-    }
-    trigger_cv.notify_all();
-}
-
-bool wait_for_trigger_stamp(std::int64_t host_unix_ns,
-                            std::uint64_t generation,
-                            std::int64_t& stamp_unix_ns)
-{
-    const auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(200);
-    std::unique_lock<std::mutex> lock(trigger_mutex);
-    for (;;) {
-        if (quitFlag.load() ||
-            g_warmup_gen.load(std::memory_order_acquire) != generation) {
-            return false;
-        }
-
-        if (!trigger_history.empty() &&
-            host_unix_ns < trigger_history.front().trigger_capture_unix_ns) {
-            return false;
-        }
-
-        for (std::size_t i = 1; i < trigger_history.size(); ++i) {
-            const TriggerEvent& before = trigger_history[i - 1];
-            const TriggerEvent& after = trigger_history[i];
-            if (host_unix_ns > after.trigger_capture_unix_ns) {
-                continue;
-            }
-
-            return interpolate_trigger_time_ns(
-                host_unix_ns,
-                before.trigger_capture_unix_ns,
-                before.trigger_output_unix_ns,
-                after.trigger_capture_unix_ns,
-                after.trigger_output_unix_ns,
-                stamp_unix_ns);
-        }
-
-        if (trigger_cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-            return false;
-        }
-    }
 }
 
 void reset_time_rows_locked()
@@ -377,7 +296,6 @@ bool open_writers(const std::string& base_dir, bool save_images)
 void signal_handler(int)
 {
     quitFlag.store(true);
-    trigger_cv.notify_all();
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -397,7 +315,6 @@ void signal_handler(int)
 void stop_capture()
 {
     quitFlag.store(true);
-    trigger_cv.notify_all();
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -458,11 +375,9 @@ void reset_capture_state()
         std::lock_guard<std::mutex> lock(time_mutex);
         reset_time_rows_locked();
     }
-    clear_trigger_history();
     g_warmup_done.store(true, std::memory_order_release);
     g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
     time_cv.notify_all();
-    trigger_cv.notify_all();
 }
 
 void guide_consumer(int cam_id)
@@ -706,7 +621,9 @@ void realsense_consumer()
         publish_temperature(
             g_rs_temp_pub,
             "realsense",
-            rs_stamp,
+            make_time_ns(static_cast<uint64_t>(to_ns_from_sec_nsec(
+                frame.color_host_sec,
+                frame.color_host_nanosec))),
             frame.temperature_celsius);
     }
 
@@ -739,7 +656,6 @@ void trigger_consumer()
         }
 
         append_time_row(trigger_event);
-        append_trigger_history(trigger_event);
         flush_time_rows();
     }
 
@@ -761,21 +677,11 @@ void guide_temperature_consumer(int cam_id)
             continue;
         }
 
-        const std::uint64_t generation =
-            g_warmup_gen.load(std::memory_order_acquire);
-        std::int64_t stamp_unix_ns = 0;
-        if (!wait_for_trigger_stamp(
-                temperature.host_unix_ns,
-                generation,
-                stamp_unix_ns)) {
-            continue;
-        }
-
         const bool is_left = cam_id == 0;
         publish_temperature(
             g_guide_camera_temp_pubs[cam_id],
             is_left ? "guide_left" : "guide_right",
-            make_time_ns(static_cast<uint64_t>(stamp_unix_ns)),
+            make_time_ns(static_cast<uint64_t>(temperature.host_unix_ns)),
             temperature.temperature);
     }
 
@@ -996,7 +902,6 @@ int main(int argc, char **argv)
     }
 
     quitFlag.store(true);
-    trigger_cv.notify_all();
     if (rs_prod) rs_prod->stop();
     if (trigger_stamps) trigger_stamps->stop();
     if (sync_bridge) sync_bridge->stop();

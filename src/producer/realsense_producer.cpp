@@ -455,7 +455,6 @@ void RealSenseProducer::run()
         spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
-    rs2::depth_sensor live_depth_sensor;
     try {
         rs2::pipeline_profile profile = pipeline.start(cfg);
         if (on_start_) on_start_(profile);
@@ -469,12 +468,12 @@ void RealSenseProducer::run()
                           << std::endl;
             }
         }
-        live_depth_sensor = live_dev.first<rs2::depth_sensor>();
-        if (live_depth_sensor) {
-            if (live_depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-                live_depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
+        depth_sensor = live_dev.first<rs2::depth_sensor>();
+        if (depth_sensor) {
+            if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+                depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
                 std::cout << "[realsense] Depth Global Time = "
-                          << (live_depth_sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
+                          << (depth_sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
                           << std::endl;
             }
         }
@@ -587,10 +586,10 @@ void RealSenseProducer::run()
             temperature_now >= next_asic_temperature_read) {
             next_asic_temperature_read = temperature_now + std::chrono::seconds(1);
             try {
-                if (live_depth_sensor &&
-                    live_depth_sensor.supports(RS2_OPTION_ASIC_TEMPERATURE)) {
+                if (depth_sensor &&
+                    depth_sensor.supports(RS2_OPTION_ASIC_TEMPERATURE)) {
                     cached_temperature_celsius =
-                        live_depth_sensor.get_option(RS2_OPTION_ASIC_TEMPERATURE);
+                        depth_sensor.get_option(RS2_OPTION_ASIC_TEMPERATURE);
                 }
             } catch (const rs2::error&) {
             }
