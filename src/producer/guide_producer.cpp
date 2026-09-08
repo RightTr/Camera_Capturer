@@ -548,7 +548,7 @@ void GuideProducer::serial_worker() {
                 std::size_t header_size = 0;
                 while (live() && header_size < 2) {
                     unsigned char byte = 0;
-                    serial_.ReadByte(byte, 10);
+                    serial_.ReadByte(byte, 100);
                     if (header_size == 0) {
                         if (byte == 0x55) {
                             response[0] = byte;
@@ -569,7 +569,7 @@ void GuideProducer::serial_worker() {
                 if (!live()) break;
 
                 for (std::size_t i = 2; i < response.size(); ++i) {
-                    serial_.ReadByte(response[i], 10);
+                    serial_.ReadByte(response[i], 100);
                     if (!live()) break;
                 }
                 if (!live()) break;
