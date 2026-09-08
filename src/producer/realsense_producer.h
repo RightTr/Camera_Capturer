@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -26,7 +27,7 @@ struct StampedRealSenseFrame {
     long depth_sensor_sec;
     long depth_sensor_microsec;
     std::int64_t trigger_unix_ns = 0;
-    float temperature_celsius = 0.0f;
+    float temperature_celsius = std::numeric_limits<float>::quiet_NaN();
 };
 
 struct StampedImuFrame {

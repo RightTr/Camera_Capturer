@@ -455,6 +455,7 @@ void RealSenseProducer::run()
         spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
+    rs2::depth_sensor live_depth_sensor;
     try {
         rs2::pipeline_profile profile = pipeline.start(cfg);
         if (on_start_) on_start_(profile);
@@ -468,11 +469,12 @@ void RealSenseProducer::run()
                           << std::endl;
             }
         }
-        if (auto d = live_dev.first<rs2::depth_sensor>()) {
-            if (d.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-                d.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
+        live_depth_sensor = live_dev.first<rs2::depth_sensor>();
+        if (live_depth_sensor) {
+            if (live_depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+                live_depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
                 std::cout << "[realsense] Depth Global Time = "
-                          << (d.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
+                          << (live_depth_sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
                           << std::endl;
             }
         }
@@ -493,6 +495,9 @@ void RealSenseProducer::run()
         return;
     }
 
+    float cached_temperature_celsius = std::numeric_limits<float>::quiet_NaN();
+    auto next_asic_temperature_read = std::chrono::steady_clock::time_point::min();
+
     while (live()) {
         rs2::frameset frameset;
         if (!pipeline.poll_for_frames(&frameset)) {
@@ -508,7 +513,8 @@ void RealSenseProducer::run()
         const long color_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             color_host_now.time_since_epoch() - color_host_s).count();
 
-        rs2::depth_frame depth_f = out.get_depth_frame();
+        const rs2::depth_frame raw_depth_f = out.get_depth_frame();
+        rs2::depth_frame depth_f = raw_depth_f;
         const auto depth_host_now = std::chrono::system_clock::now();
         const auto depth_host_s = std::chrono::duration_cast<std::chrono::seconds>(depth_host_now.time_since_epoch());
         const long depth_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -566,12 +572,28 @@ void RealSenseProducer::run()
                       depth_frame_number - last_depth_frame_number)))
             : 1U;
 
-        float temperature_celsius = 0.0f;
+        bool has_frame_temperature = false;
         try {
-            if (depth_sensor.supports(RS2_OPTION_ASIC_TEMPERATURE)) {
-                temperature_celsius = depth_sensor.get_option(RS2_OPTION_ASIC_TEMPERATURE);
+            if (raw_depth_f.supports_frame_metadata(RS2_FRAME_METADATA_TEMPERATURE)) {
+                cached_temperature_celsius = static_cast<float>(
+                    raw_depth_f.get_frame_metadata(RS2_FRAME_METADATA_TEMPERATURE));
+                has_frame_temperature = true;
             }
         } catch (const rs2::error&) {
+        }
+
+        const auto temperature_now = std::chrono::steady_clock::now();
+        if (!has_frame_temperature &&
+            temperature_now >= next_asic_temperature_read) {
+            next_asic_temperature_read = temperature_now + std::chrono::seconds(1);
+            try {
+                if (live_depth_sensor &&
+                    live_depth_sensor.supports(RS2_OPTION_ASIC_TEMPERATURE)) {
+                    cached_temperature_celsius =
+                        live_depth_sensor.get_option(RS2_OPTION_ASIC_TEMPERATURE);
+                }
+            } catch (const rs2::error&) {
+            }
         }
 
         if (!push_rgbd(StampedRealSenseFrame{
@@ -589,7 +611,7 @@ void RealSenseProducer::run()
                 depth_sensor_sec,
                 depth_sensor_usec,
                 0,
-                temperature_celsius})) {
+                cached_temperature_celsius})) {
             break;
         }
 

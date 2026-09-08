@@ -1,5 +1,6 @@
 #include "guide_producer.h"
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,9 @@ constexpr int kWidth = 640;
 constexpr int kHeight = 512;
 constexpr int kParamOffset = 512 * 1280 * 2;
 constexpr int kGuideFps = 30;
+constexpr std::size_t kQueryResponseSize = 24;
+constexpr std::size_t kFocalTempHighIndex = 10;
+constexpr std::size_t kFocalTempLowIndex = 11;
 
 uint16_t be16(const char* p)
 {
@@ -501,9 +505,6 @@ void GuideProducer::serial_worker() {
         0x00, 0x00, 0x05, 0xF0
     };
 
-    std::vector<unsigned char> buffer;
-    uint16_t focal_temp = 0;
-
     while (live()) {
             GuideProducer::SerialCmd cmd;
         std::unique_lock<std::mutex> lock(serial_mutex_);
@@ -525,40 +526,66 @@ void GuideProducer::serial_worker() {
                 serial_.Write(sync_off);
                 printf("Cam %d write SYNC_OFF\n", cam_id_);
                 break;
-            case GuideProducer::SerialCmd::QUERY:
+            case GuideProducer::SerialCmd::QUERY: {
                 serial_.Write(query_cmd);
-                unsigned char byte;
-                serial_.ReadByte(byte, 10);
-                if (!live()) break;
-                if (byte == 0x55) {
-                    buffer.clear();
-                    while (live()) {
-                        serial_.ReadByte(byte, 10);
-                        if (byte == 0xF0) break;
-                        buffer.push_back(byte);
-                    }
-                    if (buffer.size() != 22 || buffer[0] != 0xAA) continue;
-                    const auto now = std::chrono::system_clock::now();
-                    focal_temp = (static_cast<uint16_t>(buffer[9]) << 8) | static_cast<uint16_t>(buffer[10]);
-                    const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-                    const auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
-                    const auto host_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        now.time_since_epoch()).count();
-                    const float temperature = static_cast<float>(focal_temp) / 100.0f;
 
-                    push_temperature(GuideTemperature{host_unix_ns, temperature});
-                    
-                    if (temp_stream_) {
-                        *temp_stream_
-                            << sec.count() << "." << std::setw(9) << std::setfill('0') << nanosec
-                            << " " << temperature << std::endl;
+                std::array<unsigned char, kQueryResponseSize> response{};
+                std::size_t header_size = 0;
+                while (live() && header_size < 2) {
+                    unsigned char byte = 0;
+                    serial_.ReadByte(byte, 10);
+                    if (header_size == 0) {
+                        if (byte == 0x55) {
+                            response[0] = byte;
+                            header_size = 1;
+                        }
+                    } else if (byte == 0xAA) {
+                        response[1] = byte;
+                        header_size = 2;
+                    } else {
+                        if (byte == 0x55) {
+                            response[0] = byte;
+                            header_size = 1;
+                        } else {
+                            header_size = 0;
+                        }
                     }
                 }
+                if (!live()) break;
+
+                for (std::size_t i = 2; i < response.size(); ++i) {
+                    serial_.ReadByte(response[i], 10);
+                    if (!live()) break;
+                }
+                if (!live()) break;
+                if (response.back() != 0xF0) {
+                    break;
+                }
+
+                const auto now = std::chrono::system_clock::now();
+                const uint16_t focal_temp =
+                    (static_cast<uint16_t>(response[kFocalTempHighIndex]) << 8) |
+                    static_cast<uint16_t>(response[kFocalTempLowIndex]);
+                const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+                const auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
+                const auto host_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    now.time_since_epoch()).count();
+                const float temperature = static_cast<float>(focal_temp) / 100.0f;
+
+                push_temperature(GuideTemperature{host_unix_ns, temperature});
+
+                if (temp_stream_) {
+                    *temp_stream_
+                        << sec.count() << "." << std::setw(9) << std::setfill('0') << nanosec
+                        << " " << temperature << std::endl;
+                }
                 break;
+            }
             default: break;
             }
+        } catch (const LibSerial::ReadTimeout&) {
+            continue;
         } catch (const std::exception& e) {
-            if (std::string(e.what()).find("timeout") != std::string::npos) continue;
             std::cerr << "Cam " << cam_id_ << " serial error: " << e.what() << std::endl;
             try {
                 if (serial_.IsOpen()) {

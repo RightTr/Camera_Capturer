@@ -72,7 +72,7 @@ std::uint64_t next_time_row_id = 0;
 std::mutex trigger_mutex;
 std::condition_variable trigger_cv;
 std::deque<TriggerEvent> trigger_history;
-constexpr std::size_t kTriggerHistorySize = 20;
+constexpr std::size_t kTriggerHistorySize = 120;
 
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
@@ -188,10 +188,15 @@ void append_trigger_history(const TriggerEvent& trigger_event)
 
     {
         std::lock_guard<std::mutex> lock(trigger_mutex);
-        if (!trigger_history.empty() &&
-            trigger_event.trigger_capture_unix_ns <=
-                trigger_history.back().trigger_capture_unix_ns) {
-            return;
+        if (!trigger_history.empty()) {
+            const std::int64_t last_capture_ns =
+                trigger_history.back().trigger_capture_unix_ns;
+            if (trigger_event.trigger_capture_unix_ns == last_capture_ns) {
+                return;
+            }
+            if (trigger_event.trigger_capture_unix_ns < last_capture_ns) {
+                trigger_history.clear();
+            }
         }
         trigger_history.push_back(trigger_event);
         while (trigger_history.size() > kTriggerHistorySize) {
@@ -214,6 +219,8 @@ bool wait_for_trigger_stamp(std::int64_t host_unix_ns,
                             std::uint64_t generation,
                             std::int64_t& stamp_unix_ns)
 {
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(200);
     std::unique_lock<std::mutex> lock(trigger_mutex);
     for (;;) {
         if (quitFlag.load() ||
@@ -242,7 +249,9 @@ bool wait_for_trigger_stamp(std::int64_t host_unix_ns,
                 stamp_unix_ns);
         }
 
-        trigger_cv.wait(lock);
+        if (trigger_cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+            return false;
+        }
     }
 }
 
