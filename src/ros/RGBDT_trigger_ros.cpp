@@ -26,6 +26,7 @@
 
 using ImagePublisher = Publisher<ImageMsg>;
 using ImuPublisher = Publisher<ImuMsg>;
+using TemperaturePublisher = Publisher<TemperatureMsg>;
 using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 int if_save = 0;
@@ -67,6 +68,11 @@ std::mutex time_mutex;
 std::condition_variable time_cv;
 std::deque<TimeRow> time_rows;
 std::uint64_t next_time_row_id = 0;
+
+std::mutex trigger_mutex;
+std::condition_variable trigger_cv;
+std::deque<TriggerEvent> trigger_history;
+constexpr std::size_t kTriggerHistorySize = 20;
 
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
@@ -157,8 +163,10 @@ std::unique_ptr<TriggerStampDistributor> trigger_stamps;
 
 std::array<ImagePublisher, 2> g_guide_image_pubs;
 std::array<ImagePublisher, 2> g_guide_temp_pubs;
+std::array<TemperaturePublisher, 2> g_guide_camera_temp_pubs;
 ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
+TemperaturePublisher g_rs_temp_pub;
 ImuPublisher g_rs_accel_pub;
 ImuPublisher g_rs_gyro_pub;
 std::chrono::steady_clock::time_point g_output_start_at;
@@ -169,6 +177,73 @@ std::mutex g_warmup_mutex;
 bool output_enabled()
 {
     return std::chrono::steady_clock::now() >= g_output_start_at;
+}
+
+void append_trigger_history(const TriggerEvent& trigger_event)
+{
+    if (trigger_event.trigger_capture_unix_ns <= 0 ||
+        trigger_event.trigger_output_unix_ns <= 0) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(trigger_mutex);
+        if (!trigger_history.empty() &&
+            trigger_event.trigger_capture_unix_ns <=
+                trigger_history.back().trigger_capture_unix_ns) {
+            return;
+        }
+        trigger_history.push_back(trigger_event);
+        while (trigger_history.size() > kTriggerHistorySize) {
+            trigger_history.pop_front();
+        }
+    }
+    trigger_cv.notify_all();
+}
+
+void clear_trigger_history()
+{
+    {
+        std::lock_guard<std::mutex> lock(trigger_mutex);
+        trigger_history.clear();
+    }
+    trigger_cv.notify_all();
+}
+
+bool wait_for_trigger_stamp(std::int64_t host_unix_ns,
+                            std::uint64_t generation,
+                            std::int64_t& stamp_unix_ns)
+{
+    std::unique_lock<std::mutex> lock(trigger_mutex);
+    for (;;) {
+        if (quitFlag.load() ||
+            g_warmup_gen.load(std::memory_order_acquire) != generation) {
+            return false;
+        }
+
+        if (!trigger_history.empty() &&
+            host_unix_ns < trigger_history.front().trigger_capture_unix_ns) {
+            return false;
+        }
+
+        for (std::size_t i = 1; i < trigger_history.size(); ++i) {
+            const TriggerEvent& before = trigger_history[i - 1];
+            const TriggerEvent& after = trigger_history[i];
+            if (host_unix_ns > after.trigger_capture_unix_ns) {
+                continue;
+            }
+
+            return interpolate_trigger_time_ns(
+                host_unix_ns,
+                before.trigger_capture_unix_ns,
+                before.trigger_output_unix_ns,
+                after.trigger_capture_unix_ns,
+                after.trigger_output_unix_ns,
+                stamp_unix_ns);
+        }
+
+        trigger_cv.wait(lock);
+    }
 }
 
 void reset_time_rows_locked()
@@ -293,6 +368,7 @@ bool open_writers(const std::string& base_dir, bool save_images)
 void signal_handler(int)
 {
     quitFlag.store(true);
+    trigger_cv.notify_all();
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -312,6 +388,7 @@ void signal_handler(int)
 void stop_capture()
 {
     quitFlag.store(true);
+    trigger_cv.notify_all();
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -372,9 +449,11 @@ void reset_capture_state()
         std::lock_guard<std::mutex> lock(time_mutex);
         reset_time_rows_locked();
     }
+    clear_trigger_history();
     g_warmup_done.store(true, std::memory_order_release);
     g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
     time_cv.notify_all();
+    trigger_cv.notify_all();
 }
 
 void guide_consumer(int cam_id)
@@ -615,6 +694,11 @@ void realsense_consumer()
         const auto rs_stamp = make_time_ns(static_cast<uint64_t>(trigger_ns));
         publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", rs_stamp);
         publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", rs_stamp);
+        publish_temperature(
+            g_rs_temp_pub,
+            "realsense",
+            rs_stamp,
+            frame.temperature_celsius);
     }
 
     if (!quitFlag.load()) {
@@ -646,7 +730,44 @@ void trigger_consumer()
         }
 
         append_time_row(trigger_event);
+        append_trigger_history(trigger_event);
         flush_time_rows();
+    }
+
+    if (!quitFlag.load()) {
+        stop_capture();
+    }
+}
+
+void guide_temperature_consumer(int cam_id)
+{
+    while (!quitFlag.load()) {
+        GuideTemperature temperature;
+        if (!guides[cam_id]->pop_temperature(temperature)) {
+            break;
+        }
+
+        if (!output_enabled() ||
+            !g_warmup_done.load(std::memory_order_acquire)) {
+            continue;
+        }
+
+        const std::uint64_t generation =
+            g_warmup_gen.load(std::memory_order_acquire);
+        std::int64_t stamp_unix_ns = 0;
+        if (!wait_for_trigger_stamp(
+                temperature.host_unix_ns,
+                generation,
+                stamp_unix_ns)) {
+            continue;
+        }
+
+        const bool is_left = cam_id == 0;
+        publish_temperature(
+            g_guide_camera_temp_pubs[cam_id],
+            is_left ? "guide_left" : "guide_right",
+            make_time_ns(static_cast<uint64_t>(stamp_unix_ns)),
+            temperature.temperature);
     }
 
     if (!quitFlag.load()) {
@@ -738,8 +859,11 @@ int main(int argc, char **argv)
         g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
         g_guide_temp_pubs[1] = advertise<ImageMsg>("guide_right/temperature", 5);
     }
+    g_guide_camera_temp_pubs[0] = advertise<TemperatureMsg>("guide_left/camera_temperature", 5);
+    g_guide_camera_temp_pubs[1] = advertise<TemperatureMsg>("guide_right/camera_temperature", 5);
     g_rs_rgb_pub = advertise<ImageMsg>("realsense/rgb/image", 5);
     g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
+    g_rs_temp_pub = advertise<TemperatureMsg>("realsense/camera_temperature", 5);
     g_rs_accel_pub = advertise<ImuMsg>("realsense/imu/accel", 50);
     g_rs_gyro_pub = advertise<ImuMsg>("realsense/imu/gyro", 200);
     auto sync_sub = subscribe<Int32Msg>(
@@ -832,6 +956,8 @@ int main(int argc, char **argv)
     consumers.emplace_back(trigger_consumer);
     consumers.emplace_back(guide_consumer, 0);
     consumers.emplace_back(guide_consumer, 1);
+    consumers.emplace_back(guide_temperature_consumer, 0);
+    consumers.emplace_back(guide_temperature_consumer, 1);
     consumers.emplace_back(realsense_consumer);
     consumers.emplace_back(accel_consumer);
     consumers.emplace_back(gyro_consumer);
@@ -861,6 +987,7 @@ int main(int argc, char **argv)
     }
 
     quitFlag.store(true);
+    trigger_cv.notify_all();
     if (rs_prod) rs_prod->stop();
     if (trigger_stamps) trigger_stamps->stop();
     if (sync_bridge) sync_bridge->stop();

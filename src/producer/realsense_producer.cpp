@@ -566,6 +566,14 @@ void RealSenseProducer::run()
                       depth_frame_number - last_depth_frame_number)))
             : 1U;
 
+        float temperature_celsius = 0.0f;
+        try {
+            if (depth_sensor.supports(RS2_OPTION_ASIC_TEMPERATURE)) {
+                temperature_celsius = depth_sensor.get_option(RS2_OPTION_ASIC_TEMPERATURE);
+            }
+        } catch (const rs2::error&) {
+        }
+
         if (!push_rgbd(StampedRealSenseFrame{
                 rgb.clone(),
                 depth.clone(),
@@ -579,7 +587,9 @@ void RealSenseProducer::run()
                 depth_host_s.count(),
                 depth_host_ns,
                 depth_sensor_sec,
-                depth_sensor_usec})) {
+                depth_sensor_usec,
+                0,
+                temperature_celsius})) {
             break;
         }
 

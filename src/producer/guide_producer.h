@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -83,6 +84,11 @@ struct GuideFrame {
     std::int64_t trigger_unix_ns = 0;
 };
 
+struct GuideTemperature {
+    std::int64_t host_unix_ns = 0;
+    float temperature = 0.0f;
+};
+
 class GuideProducer {
 public:
     enum class SerialCmd {
@@ -124,6 +130,7 @@ public:
     void set_serial_query_time(int interval_ms);
     void run();
     bool pop(GuideFrame& frame);
+    bool pop_temperature(GuideTemperature& temperature);
     void clear();
     void stop();
     int start_capture();
@@ -134,6 +141,7 @@ public:
 private:
     bool live() const;
     bool push(GuideFrame&& frame);
+    void push_temperature(GuideTemperature&& temperature);
     void cleanup_capture();
     
     // Serial port helpers
@@ -157,6 +165,10 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::queue<GuideFrame> queue_;
+    std::mutex temperature_mutex_;
+    std::condition_variable temperature_cv_;
+    std::deque<GuideTemperature> temperature_queue_;
+    static constexpr std::size_t kTemperatureQueueSize = 8;
     std::atomic<bool> stopped_{false};
 
     // Serial port members

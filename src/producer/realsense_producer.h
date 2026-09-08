@@ -26,6 +26,7 @@ struct StampedRealSenseFrame {
     long depth_sensor_sec;
     long depth_sensor_microsec;
     std::int64_t trigger_unix_ns = 0;
+    float temperature_celsius = 0.0f;
 };
 
 struct StampedImuFrame {

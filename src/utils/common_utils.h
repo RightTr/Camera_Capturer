@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -82,6 +83,28 @@ inline int64_t system_time_ns_now()
 {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+inline bool interpolate_trigger_time_ns(int64_t sample_ns,
+                                        int64_t capture0_ns,
+                                        int64_t output0_ns,
+                                        int64_t capture1_ns,
+                                        int64_t output1_ns,
+                                        int64_t& interpolated_ns)
+{
+    const int64_t capture_delta = capture1_ns - capture0_ns;
+    if (capture_delta <= 0 ||
+        sample_ns < capture0_ns ||
+        sample_ns > capture1_ns) {
+        return false;
+    }
+
+    const double alpha = static_cast<double>(sample_ns - capture0_ns) /
+        static_cast<double>(capture_delta);
+    const int64_t output_delta = output1_ns - output0_ns;
+    interpolated_ns = output0_ns +
+        static_cast<int64_t>(std::llround(alpha * output_delta));
+    return interpolated_ns > 0;
 }
 
 inline void log_errno(const char* message)

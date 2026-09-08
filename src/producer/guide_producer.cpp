@@ -247,6 +247,7 @@ void GuideProducer::stop()
 {
     stopped_.store(true, std::memory_order_relaxed);
     cv_.notify_all();
+    temperature_cv_.notify_all();
     stop_serial();
 }
 
@@ -281,12 +282,45 @@ bool GuideProducer::pop(GuideFrame& frame)
     return true;
 }
 
+void GuideProducer::push_temperature(GuideTemperature&& temperature)
+{
+    {
+        std::lock_guard<std::mutex> lock(temperature_mutex_);
+        if (temperature_queue_.size() >= kTemperatureQueueSize) {
+            temperature_queue_.pop_front();
+        }
+        temperature_queue_.emplace_back(std::move(temperature));
+    }
+    temperature_cv_.notify_one();
+}
+
+bool GuideProducer::pop_temperature(GuideTemperature& temperature)
+{
+    std::unique_lock<std::mutex> lock(temperature_mutex_);
+    temperature_cv_.wait(lock, [&] {
+        return !temperature_queue_.empty() || !live();
+    });
+    if (temperature_queue_.empty()) {
+        return false;
+    }
+    temperature = std::move(temperature_queue_.front());
+    temperature_queue_.pop_front();
+    return true;
+}
+
 void GuideProducer::clear()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::queue<GuideFrame> empty;
-    queue_.swap(empty);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::queue<GuideFrame> empty;
+        queue_.swap(empty);
+    }
+    {
+        std::lock_guard<std::mutex> lock(temperature_mutex_);
+        temperature_queue_.clear();
+    }
     cv_.notify_all();
+    temperature_cv_.notify_all();
 }
 
 void GuideProducer::run()
@@ -504,15 +538,20 @@ void GuideProducer::serial_worker() {
                         buffer.push_back(byte);
                     }
                     if (buffer.size() != 22 || buffer[0] != 0xAA) continue;
-                    auto now = std::chrono::system_clock::now();
+                    const auto now = std::chrono::system_clock::now();
                     focal_temp = (static_cast<uint16_t>(buffer[9]) << 8) | static_cast<uint16_t>(buffer[10]);
-                    auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-                    auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
+                    const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+                    const auto nanosec = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
+                    const auto host_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        now.time_since_epoch()).count();
+                    const float temperature = static_cast<float>(focal_temp) / 100.0f;
+
+                    push_temperature(GuideTemperature{host_unix_ns, temperature});
                     
                     if (temp_stream_) {
                         *temp_stream_
                             << sec.count() << "." << std::setw(9) << std::setfill('0') << nanosec
-                            << " " << (static_cast<float>(focal_temp) / 100.0f) << std::endl;
+                            << " " << temperature << std::endl;
                     }
                 }
                 break;

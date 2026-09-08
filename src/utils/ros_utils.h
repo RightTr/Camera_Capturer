@@ -15,12 +15,14 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/Imu.h>
+#include <sensor_msgs/Temperature.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/UInt64.h>
 #elif defined(USE_ROS2)
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/temperature.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/u_int64.hpp>
 #endif
@@ -40,6 +42,7 @@ using Time = ros::Time;
 using Rate = ros::Rate;
 using ImageMsg = sensor_msgs::Image;
 using ImuMsg = sensor_msgs::Imu;
+using TemperatureMsg = sensor_msgs::Temperature;
 using Int32Msg = std_msgs::Int32;
 using UInt64Msg = std_msgs::UInt64;
 #elif defined(USE_ROS2)
@@ -57,6 +60,7 @@ using Time = rclcpp::Time;
 using Rate = rclcpp::Rate;
 using ImageMsg = sensor_msgs::msg::Image;
 using ImuMsg = sensor_msgs::msg::Imu;
+using TemperatureMsg = sensor_msgs::msg::Temperature;
 using Int32Msg = std_msgs::msg::Int32;
 using UInt64Msg = std_msgs::msg::UInt64;
 #endif
@@ -311,6 +315,20 @@ inline void publish_image(const PubT &pub,
         }
     }
 
+    publish(pub, msg);
+}
+
+template <typename PubT>
+inline void publish_temperature(const PubT &pub,
+                                const std::string &frame_id,
+                                const Time &stamp,
+                                double temperature)
+{
+    TemperatureMsg msg;
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = stamp;
+    msg.temperature = temperature;
+    msg.variance = 0.0;
     publish(pub, msg);
 }
 
