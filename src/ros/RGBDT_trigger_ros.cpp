@@ -69,10 +69,6 @@ std::condition_variable time_cv;
 std::deque<TimeRow> time_rows;
 std::uint64_t next_time_row_id = 0;
 
-std::atomic<std::int64_t> g_last_trigger_activity_ns{0};
-std::array<std::atomic<std::int64_t>, 2> g_last_guide_activity_ns{{0, 0}};
-std::atomic<std::int64_t> g_last_rs_activity_ns{0};
-
 void request_stop(const char* reason)
 {
     if (!quitFlag.exchange(true)) {
@@ -138,8 +134,7 @@ private:
         while (!stopped_.load(std::memory_order_relaxed) && !quitFlag.load()) {
             const TriggerEvent trigger_event = bridge_.take_trigger_event();
             if (trigger_event.trigger_output_unix_ns <= 0) {
-                request_stop("SyncBridge stopped");
-                break;
+                continue;
             }
 
             {
@@ -185,30 +180,6 @@ std::mutex g_warmup_mutex;
 bool output_enabled()
 {
     return std::chrono::steady_clock::now() >= g_output_start_at;
-}
-
-std::int64_t steady_time_ns_now()
-{
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-std::int64_t activity_age_ms(const std::atomic<std::int64_t>& last,
-                             std::int64_t now_ns)
-{
-    const std::int64_t last_ns = last.load(std::memory_order_relaxed);
-    return last_ns > 0 ? (now_ns - last_ns) / 1000000LL : -1;
-}
-
-void print_status()
-{
-    const std::int64_t now_ns = steady_time_ns_now();
-    std::cout << "[STATUS] trigger="
-              << activity_age_ms(g_last_trigger_activity_ns, now_ns) << "ms left="
-              << activity_age_ms(g_last_guide_activity_ns[0], now_ns) << "ms right="
-              << activity_age_ms(g_last_guide_activity_ns[1], now_ns) << "ms rs="
-              << activity_age_ms(g_last_rs_activity_ns, now_ns) << "ms"
-              << std::endl;
 }
 
 void reset_time_rows_locked()
@@ -539,9 +510,6 @@ void guide_consumer(int cam_id)
                 is_left ? "guide_left" : "guide_right",
                 stamp);
         }
-        g_last_guide_activity_ns[static_cast<std::size_t>(cam_id)].store(
-            steady_time_ns_now(),
-            std::memory_order_relaxed);
     }
 
     if (!quitFlag.load()) {
@@ -660,7 +628,6 @@ void realsense_consumer()
                 frame.color_host_sec,
                 frame.color_host_nanosec))),
             frame.temperature_celsius);
-        g_last_rs_activity_ns.store(steady_time_ns_now(), std::memory_order_relaxed);
     }
 
     if (!quitFlag.load()) {
@@ -692,7 +659,6 @@ void trigger_consumer()
         }
 
         append_time_row(trigger_event);
-        g_last_trigger_activity_ns.store(steady_time_ns_now(), std::memory_order_relaxed);
         flush_time_rows();
     }
 
@@ -941,14 +907,8 @@ int main(int argc, char **argv)
     }
 
     Rate rate(100.0);
-    auto next_status_at = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     while (ok() && !quitFlag.load()) {
         spin_once();
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_status_at) {
-            print_status();
-            next_status_at = now + std::chrono::seconds(1);
-        }
         rate.sleep();
     }
 
