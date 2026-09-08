@@ -1,6 +1,7 @@
 #include "guide_producer.h"
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -249,7 +250,11 @@ bool GuideProducer::live() const
 
 void GuideProducer::stop()
 {
-    stopped_.store(true, std::memory_order_relaxed);
+    if (stopped_.exchange(true, std::memory_order_relaxed)) {
+        cv_.notify_all();
+        temperature_cv_.notify_all();
+        return;
+    }
     cv_.notify_all();
     temperature_cv_.notify_all();
     stop_serial();
@@ -338,6 +343,9 @@ void GuideProducer::run()
         const int ret = poll(&pfd, 1, 33);
         if (!live()) break;
         if (ret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             perror("poll");
             if (fail_) fail_();
             break;
@@ -352,6 +360,9 @@ void GuideProducer::run()
         buf.memory = V4L2_MEMORY_MMAP;
 
         if (ioctl(fd_, VIDIOC_DQBUF, &buf) < 0) {
+            if (errno == EINTR || errno == EAGAIN) {
+                continue;
+            }
             perror(("Dequeue Buffer " + name).c_str());
             if (fail_) fail_();
             break;
@@ -378,13 +389,17 @@ void GuideProducer::run()
                 std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
 
             if (!push(std::move(frame))) {
-                if (fail_) fail_();
                 break;
             }
             last = now;
         }
 
-        if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
+        int queue_result = -1;
+        do {
+            queue_result = ioctl(fd_, VIDIOC_QBUF, &buf);
+        } while (queue_result < 0 && errno == EINTR && live());
+        if (queue_result < 0) {
+            if (!live()) break;
             perror(("Queue Buffer " + name).c_str());
             if (fail_) fail_();
             break;

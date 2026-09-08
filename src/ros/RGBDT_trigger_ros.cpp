@@ -69,6 +69,18 @@ std::condition_variable time_cv;
 std::deque<TimeRow> time_rows;
 std::uint64_t next_time_row_id = 0;
 
+std::atomic<std::int64_t> g_last_trigger_activity_ns{0};
+std::array<std::atomic<std::int64_t>, 2> g_last_guide_activity_ns{{0, 0}};
+std::atomic<std::int64_t> g_last_rs_activity_ns{0};
+
+void request_stop(const char* reason)
+{
+    if (!quitFlag.exchange(true)) {
+        std::cerr << "[STOP] " << reason << std::endl;
+    }
+    time_cv.notify_all();
+}
+
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
 std::unique_ptr<SyncBridge> sync_bridge;
@@ -126,7 +138,8 @@ private:
         while (!stopped_.load(std::memory_order_relaxed) && !quitFlag.load()) {
             const TriggerEvent trigger_event = bridge_.take_trigger_event();
             if (trigger_event.trigger_output_unix_ns <= 0) {
-                continue;
+                request_stop("SyncBridge stopped");
+                break;
             }
 
             {
@@ -135,7 +148,7 @@ private:
                     std::cerr << "[trigger] trigger queue overflow: size="
                               << trigger_queue_.size()
                               << " max=" << max_queue_size_ << std::endl;
-                    quitFlag.store(true);
+                    request_stop("Trigger queue overflow");
                     cv_.notify_all();
                     break;
                 }
@@ -172,6 +185,30 @@ std::mutex g_warmup_mutex;
 bool output_enabled()
 {
     return std::chrono::steady_clock::now() >= g_output_start_at;
+}
+
+std::int64_t steady_time_ns_now()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::int64_t activity_age_ms(const std::atomic<std::int64_t>& last,
+                             std::int64_t now_ns)
+{
+    const std::int64_t last_ns = last.load(std::memory_order_relaxed);
+    return last_ns > 0 ? (now_ns - last_ns) / 1000000LL : -1;
+}
+
+void print_status()
+{
+    const std::int64_t now_ns = steady_time_ns_now();
+    std::cout << "[STATUS] trigger="
+              << activity_age_ms(g_last_trigger_activity_ns, now_ns) << "ms left="
+              << activity_age_ms(g_last_guide_activity_ns[0], now_ns) << "ms right="
+              << activity_age_ms(g_last_guide_activity_ns[1], now_ns) << "ms rs="
+              << activity_age_ms(g_last_rs_activity_ns, now_ns) << "ms"
+              << std::endl;
 }
 
 void reset_time_rows_locked()
@@ -295,26 +332,22 @@ bool open_writers(const std::string& base_dir, bool save_images)
 
 void signal_handler(int)
 {
-    quitFlag.store(true);
-    if (rs_prod) {
-        rs_prod->stop();
-    }
-    for (int i = 0; i < 2; ++i) {
-        if (guides[i]) {
-            guides[i]->stop();
-        }
-    }
-    if (trigger_stamps) {
-        trigger_stamps->stop();
-    }
-    if (sync_bridge) {
-        sync_bridge->stop();
-    }
+    request_stop("Signal received");
 }
 
-void stop_capture()
+void stop_capture(const char* reason)
 {
-    quitFlag.store(true);
+    request_stop(reason);
+}
+
+void stop_components()
+{
+    if (sync_bridge) {
+        sync_bridge->stop();
+    }
+    if (trigger_stamps) {
+        trigger_stamps->stop();
+    }
     if (rs_prod) {
         rs_prod->stop();
     }
@@ -322,25 +355,22 @@ void stop_capture()
         if (guides[i]) {
             guides[i]->stop();
         }
-    }
-    if (trigger_stamps) {
-        trigger_stamps->stop();
-    }
-    if (sync_bridge) {
-        sync_bridge->stop();
     }
 }
 
 bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::condition_variable& cv)
 {
     std::unique_lock<std::mutex> lock(mutex);
-    return cv.wait_for(lock, std::chrono::seconds(10), [&] {
+    cv.wait_for(lock, std::chrono::seconds(10), [&] {
         return ready.load(std::memory_order_relaxed) || quitFlag.load();
     });
+    return ready.load(std::memory_order_relaxed) && !quitFlag.load();
 }
 
 TimeRow* wait_for_row_locked(std::unique_lock<std::mutex>& lock, std::uint64_t cursor_id, std::uint64_t seen_gen)
 {
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(200);
     while (!quitFlag.load()) {
         if (g_warmup_gen.load(std::memory_order_acquire) != seen_gen) {
             return nullptr;
@@ -348,7 +378,9 @@ TimeRow* wait_for_row_locked(std::unique_lock<std::mutex>& lock, std::uint64_t c
         if (TimeRow* row = row_for_cursor(cursor_id)) {
             return row;
         }
-        time_cv.wait(lock);
+        if (time_cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+            return nullptr;
+        }
     }
     return nullptr;
 }
@@ -507,10 +539,13 @@ void guide_consumer(int cam_id)
                 is_left ? "guide_left" : "guide_right",
                 stamp);
         }
+        g_last_guide_activity_ns[static_cast<std::size_t>(cam_id)].store(
+            steady_time_ns_now(),
+            std::memory_order_relaxed);
     }
 
     if (!quitFlag.load()) {
-        stop_capture();
+        stop_capture("Guide image consumer stopped");
     }
 }
 
@@ -625,10 +660,11 @@ void realsense_consumer()
                 frame.color_host_sec,
                 frame.color_host_nanosec))),
             frame.temperature_celsius);
+        g_last_rs_activity_ns.store(steady_time_ns_now(), std::memory_order_relaxed);
     }
 
     if (!quitFlag.load()) {
-        stop_capture();
+        stop_capture("RealSense consumer stopped");
     }
 }
 
@@ -656,11 +692,12 @@ void trigger_consumer()
         }
 
         append_time_row(trigger_event);
+        g_last_trigger_activity_ns.store(steady_time_ns_now(), std::memory_order_relaxed);
         flush_time_rows();
     }
 
     if (!quitFlag.load()) {
-        stop_capture();
+        stop_capture("Trigger consumer stopped");
     }
 }
 
@@ -672,8 +709,7 @@ void guide_temperature_consumer(int cam_id)
             break;
         }
 
-        if (!output_enabled() ||
-            !g_warmup_done.load(std::memory_order_acquire)) {
+        if (!output_enabled()) {
             continue;
         }
 
@@ -686,7 +722,7 @@ void guide_temperature_consumer(int cam_id)
     }
 
     if (!quitFlag.load()) {
-        stop_capture();
+        stop_capture("Guide temperature consumer stopped");
     }
 }
 
@@ -802,7 +838,7 @@ int main(int argc, char **argv)
             dev_left,
             dev_right,
             [] { return !quitFlag.load(); },
-            [] { quitFlag.store(true); })) {
+            [] { request_stop("Guide producer failed"); })) {
         return EXIT_FAILURE;
     }
     for (auto& guide : guides) {
@@ -826,7 +862,7 @@ int main(int argc, char **argv)
         dev_rs,
         [] { return !quitFlag.load(); },
         [&] {
-            quitFlag.store(true);
+            request_stop("RealSense producer failed");
             rs_ready_cv.notify_all();
         },
         [&](const rs2::pipeline_profile& profile) {
@@ -846,6 +882,11 @@ int main(int argc, char **argv)
     producers.emplace_back([]() { rs_prod->run(); });
 
     if (!wait_realsense_ready(rs_ready, rs_ready_mutex, rs_ready_cv)) {
+        request_stop("RealSense startup timeout");
+        stop_components();
+        for (auto& t : producers) {
+            if (t.joinable()) t.join();
+        }
         return EXIT_FAILURE;
     }
 
@@ -856,8 +897,11 @@ int main(int argc, char **argv)
     sync_config.max_queue_size = static_cast<std::size_t>(std::max(1, sync_queue_size));
     sync_bridge = std::make_unique<SyncBridge>(sync_config);
     if (!sync_bridge->start()) {
-        quitFlag.store(true);
-        if (rs_prod) rs_prod->stop();
+        request_stop("SyncBridge start failed");
+        stop_components();
+        for (auto& t : producers) {
+            if (t.joinable()) t.join();
+        }
         return EXIT_FAILURE;
     }
     trigger_stamps = std::make_unique<TriggerStampDistributor>(
@@ -881,10 +925,11 @@ int main(int argc, char **argv)
     }
 
     if (!GuideProducer::start_capture_pair(guides)) {
-        quitFlag.store(true);
-        if (rs_prod) rs_prod->stop();
-        if (trigger_stamps) trigger_stamps->stop();
-        if (sync_bridge) sync_bridge->stop();
+        request_stop("Guide capture start failed");
+        stop_components();
+        for (auto& t : producers) {
+            if (t.joinable()) t.join();
+        }
         for (auto& t : consumers) {
             if (t.joinable()) t.join();
         }
@@ -896,21 +941,19 @@ int main(int argc, char **argv)
     }
 
     Rate rate(100.0);
+    auto next_status_at = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     while (ok() && !quitFlag.load()) {
         spin_once();
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_status_at) {
+            print_status();
+            next_status_at = now + std::chrono::seconds(1);
+        }
         rate.sleep();
     }
 
-    quitFlag.store(true);
-    if (rs_prod) rs_prod->stop();
-    if (trigger_stamps) trigger_stamps->stop();
-    if (sync_bridge) sync_bridge->stop();
-    for (int i = 0; i < 2; ++i) {
-        if (guides[i]) {
-            guides[i]->stop();
-            guides[i]->stop_serial();
-        }
-    }
+    request_stop("ROS shutdown");
+    stop_components();
 
     for (auto& t : producers) t.join();
     for (auto& t : consumers) t.join();
