@@ -72,26 +72,28 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
     const auto color_sensor_ns = to_ns_from_sec_usec(
         frame.color_sensor_sec,
         frame.color_sensor_microsec);
-    const auto depth_sensor_ns = to_ns_from_sec_usec(
-        frame.depth_sensor_sec,
-        frame.depth_sensor_microsec);
+    const auto depth_sensor_ns = frame.has_depth
+        ? to_ns_from_sec_usec(frame.depth_sensor_sec, frame.depth_sensor_microsec)
+        : 0;
     const auto color_stamp_ns = frame.trigger_unix_ns != 0 ? frame.trigger_unix_ns : color_sensor_ns;
     const auto depth_stamp_ns = frame.trigger_unix_ns != 0 ? frame.trigger_unix_ns : depth_sensor_ns;
     const std::string color_sensor_time = format_timestamp_ns(color_sensor_ns);
-    const std::string depth_sensor_time = format_timestamp_ns(depth_sensor_ns);
+    const std::string depth_sensor_time = frame.has_depth
+        ? format_timestamp_ns(depth_sensor_ns)
+        : std::string{};
     const std::string color_stamp_time = format_timestamp_ns(color_stamp_ns);
     const std::string depth_stamp_time = format_timestamp_ns(depth_stamp_ns);
     const std::string color_host_time = format_timestamp_sec_nsec(
         frame.color_host_sec,
         frame.color_host_nanosec);
-    const std::string depth_host_time = format_timestamp_sec_nsec(
-        frame.depth_host_sec,
-        frame.depth_host_nanosec);
+    const std::string depth_host_time = frame.has_depth
+        ? format_timestamp_sec_nsec(frame.depth_host_sec, frame.depth_host_nanosec)
+        : std::string{};
 
     time_stream_ << frame.color_frame_number << ","
                  << color_sensor_time << ","
                  << color_host_time << ","
-                 << frame.depth_frame_number << ","
+                 << (frame.has_depth ? std::to_string(frame.depth_frame_number) : std::string{}) << ","
                  << depth_sensor_time << ","
                  << depth_host_time << '\n';
 
@@ -100,10 +102,12 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
         ss << output_dir_ << "/realsense/rgb/" << color_stamp_time << ".png";
         cv::imwrite(ss.str(), frame.color_image);
 
-        ss.str("");
-        ss.clear();
-        ss << output_dir_ << "/realsense/depth_raw/" << depth_stamp_time << ".png";
-        cv::imwrite(ss.str(), frame.depth_image_raw);
+        if (!frame.depth_image_raw.empty()) {
+            ss.str("");
+            ss.clear();
+            ss << output_dir_ << "/realsense/depth_raw/" << depth_stamp_time << ".png";
+            cv::imwrite(ss.str(), frame.depth_image_raw);
+        }
     }
 }
 

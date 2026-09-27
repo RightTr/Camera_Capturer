@@ -1,12 +1,15 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <array>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <iostream>
 #include <string>
 
 #include <opencv2/core/mat.hpp>
@@ -26,6 +29,48 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/u_int64.hpp>
 #endif
+
+struct ImagePublishStats {
+    std::atomic<std::uint64_t> copy_count{0};
+    std::atomic<std::uint64_t> copy_bytes{0};
+    std::atomic<std::uint64_t> publish_ns{0};
+
+    ~ImagePublishStats()
+    {
+        report("final");
+    }
+
+    void record(std::size_t bytes, std::uint64_t elapsed_ns)
+    {
+        copy_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        publish_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+        const auto count = copy_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count % 300 == 0) {
+            report("periodic");
+        }
+    }
+
+    void report(const char* kind) const
+    {
+        const auto count = copy_count.load(std::memory_order_relaxed);
+        if (count == 0) {
+            return;
+        }
+        std::cout << "[image_publish_stats] " << kind
+                  << " copies=" << count
+                  << " bytes=" << copy_bytes.load(std::memory_order_relaxed)
+                  << " avg_publish_ms="
+                  << static_cast<double>(publish_ns.load(std::memory_order_relaxed)) /
+                         count / 1.0e6
+                  << std::endl;
+    }
+};
+
+inline ImagePublishStats& image_publish_stats()
+{
+    static ImagePublishStats stats;
+    return stats;
+}
 
 #ifdef USE_ROS1
 template <typename MsgT>
@@ -307,6 +352,7 @@ inline void publish_image(const PubT &pub,
                           const std::string &frame_id,
                           const Time &stamp)
 {
+    const auto publish_started = std::chrono::steady_clock::now();
     ImageMsg msg;
     msg.header.frame_id = frame_id;
     msg.header.stamp = stamp;
@@ -330,6 +376,9 @@ inline void publish_image(const PubT &pub,
     }
 
     publish(pub, msg);
+    const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - publish_started).count();
+    image_publish_stats().record(msg.data.size(), static_cast<std::uint64_t>(elapsed_ns));
 }
 
 template <typename PubT>

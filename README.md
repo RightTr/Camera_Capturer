@@ -221,6 +221,13 @@ The first 10 seconds after startup are treated as a warm-up period. Frames are c
 ros2 launch camera_capturer realsense.launch.py
 ```
 
+RealSense launch files expose two independent depth controls:
+
+- `depth_stream_enable:=false` disables the depth stream completely.
+- `depth_stream_enable:=true depth_processing_enable:=false` keeps depth metadata
+  and hardware synchronization active, but skips alignment, filtering, depth image
+  publication, and depth PNG output.
+
 ## 4. Output
 
 When `if_save=1`, data is written under `output_dir`. Image folders are written only when `if_save_img=1`; CSV and text metadata are still saved when `if_save_img=0`.

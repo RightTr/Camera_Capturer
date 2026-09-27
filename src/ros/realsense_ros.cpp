@@ -22,6 +22,7 @@ std::atomic<bool> quitFlag(false);
 std::unique_ptr<RealSenseProducer> rs_prod;
 std::unique_ptr<RealSenseWriter> rs_writer;
 int if_save = 0;
+bool g_depth_processing_enabled = true;
 
 ImagePublisher g_rs_rgb_pub;
 ImagePublisher g_rs_depth_pub;
@@ -41,6 +42,7 @@ void realsense_consumer()
     while (!quitFlag.load()) {
         StampedRealSenseFrame frame;
         if (!rs_prod->pop_rgbd(frame)) break;
+        if (!rs_prod->process_rgbd(frame)) continue;
 
         if (if_save) {
             rs_writer->write_rgbd(frame);
@@ -53,7 +55,9 @@ void realsense_consumer()
             frame.depth_sensor_sec,
             frame.depth_sensor_microsec);
         publish_image(g_rs_rgb_pub, frame.color_image, "bgr8", "realsense_color", color_stamp);
-        publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", depth_stamp);
+        if (g_depth_processing_enabled && !frame.depth_image_raw.empty()) {
+            publish_image(g_rs_depth_pub, frame.depth_image_raw, "16UC1", "realsense_depth", depth_stamp);
+        }
     }
 
     if (!quitFlag.load()) {
@@ -123,6 +127,9 @@ int main(int argc, char **argv)
     const int imu_fps = get_param<int>("imu_fps", 200);
     const bool enable_align = get_param<bool>("enable_align", true);
     const bool enable_filter = get_param<bool>("enable_filter", true);
+    const bool depth_stream_enable = get_param<bool>("depth_stream_enable", true);
+    g_depth_processing_enabled =
+        get_param<bool>("depth_processing_enable", true) && depth_stream_enable;
     const int rgbd_queue_size = get_param<int>("rgbd_queue_size", 30);
     const int imu_queue_size = get_param<int>("imu_queue_size", 400);
     if_save = get_param<int>("if_save", 0);
@@ -137,7 +144,9 @@ int main(int argc, char **argv)
     }
 
     g_rs_rgb_pub = advertise<ImageMsg>("realsense/rgb/image", 5);
-    g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
+    if (g_depth_processing_enabled) {
+        g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
+    }
     g_rs_accel_pub = advertise<ImuMsg>("realsense/imu/accel", 50);
     g_rs_gyro_pub = advertise<ImuMsg>("realsense/imu/gyro", 200);
 
@@ -171,6 +180,8 @@ int main(int argc, char **argv)
     rs_prod->set_imu_csv_enabled(if_save != 0);
     rs_prod->set_align_enabled(enable_align);
     rs_prod->set_filter_enabled(enable_filter);
+    rs_prod->set_depth_stream_enabled(depth_stream_enable);
+    rs_prod->set_depth_processing_enabled(g_depth_processing_enabled);
     rs_prod->set_rgbd_queue_size(rgbd_queue_size);
     rs_prod->set_imu_queue_size(imu_queue_size);
 

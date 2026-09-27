@@ -15,6 +15,8 @@ def generate_launch_description():
     imu_fps = LaunchConfiguration("imu_fps")
     enable_align = LaunchConfiguration("enable_align")
     enable_filter = LaunchConfiguration("enable_filter")
+    depth_stream_enable = LaunchConfiguration("depth_stream_enable")
+    depth_processing_enable = LaunchConfiguration("depth_processing_enable")
     rgbd_queue_size = LaunchConfiguration("rgbd_queue_size")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
     if_save = LaunchConfiguration("if_save")
@@ -55,6 +57,16 @@ def generate_launch_description():
             "enable_filter",
             default_value="true",
             description="Apply spatial and temporal filters to depth.",
+        ),
+        DeclareLaunchArgument(
+            "depth_stream_enable",
+            default_value="true",
+            description="Enable the RealSense depth stream.",
+        ),
+        DeclareLaunchArgument(
+            "depth_processing_enable",
+            default_value="true",
+            description="Process, publish, and save depth frames when the depth stream is enabled.",
         ),
         DeclareLaunchArgument(
             "rgbd_queue_size",
@@ -98,6 +110,8 @@ def generate_launch_description():
                 "imu_fps": ParameterValue(imu_fps, value_type=int),
                 "enable_align": ParameterValue(enable_align, value_type=bool),
                 "enable_filter": ParameterValue(enable_filter, value_type=bool),
+                "depth_stream_enable": ParameterValue(depth_stream_enable, value_type=bool),
+                "depth_processing_enable": ParameterValue(depth_processing_enable, value_type=bool),
                 "rgbd_queue_size": ParameterValue(rgbd_queue_size, value_type=int),
                 "imu_queue_size": ParameterValue(imu_queue_size, value_type=int),
                 "if_save": ParameterValue(if_save, value_type=int),

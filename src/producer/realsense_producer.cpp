@@ -125,6 +125,16 @@ RealSenseProducer::RealSenseProducer(
 RealSenseProducer::~RealSenseProducer()
 {
     stop();
+    const auto processed = processed_count_.load(std::memory_order_relaxed);
+    const auto depth_processed = depth_processed_count_.load(std::memory_order_relaxed);
+    std::cout << "[realsense] processed=" << processed
+              << " depth_processed=" << depth_processed
+              << " depth_skipped=" << depth_skipped_count_.load(std::memory_order_relaxed)
+              << " avg_align_ms="
+              << (depth_processed ? static_cast<double>(align_ns_.load()) / depth_processed / 1.0e6 : 0.0)
+              << " avg_filter_ms="
+              << (depth_processed ? static_cast<double>(filter_ns_.load()) / depth_processed / 1.0e6 : 0.0)
+              << std::endl;
 }
 
 void RealSenseProducer::set_sync_mode(int sync_mode)
@@ -160,6 +170,19 @@ void RealSenseProducer::set_align_enabled(bool align)
 void RealSenseProducer::set_filter_enabled(bool filter)
 {
     filter_ = filter;
+}
+
+void RealSenseProducer::set_depth_stream_enabled(bool enabled)
+{
+    depth_stream_enabled_ = enabled;
+    if (!enabled) {
+        depth_processing_enabled_ = false;
+    }
+}
+
+void RealSenseProducer::set_depth_processing_enabled(bool enabled)
+{
+    depth_processing_enabled_ = depth_stream_enabled_ && enabled;
 }
 
 void RealSenseProducer::set_rgbd_queue_size(int rgbd_max)
@@ -269,6 +292,69 @@ bool RealSenseProducer::pop_rgbd(StampedRealSenseFrame& frame)
     return true;
 }
 
+bool RealSenseProducer::process_rgbd(StampedRealSenseFrame& frame)
+{
+    if (!frame.color_frame) {
+        frame.color_frame = frame.frameset.get_color_frame();
+    }
+    if (!frame.color_frame) {
+        return false;
+    }
+
+    if (depth_processing_enabled_ && frame.has_depth) {
+        rs2::frameset output = frame.frameset;
+        if (align_) {
+            const auto started = std::chrono::steady_clock::now();
+            output = align_to_color_.process(output);
+            align_ns_.fetch_add(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - started).count()),
+                std::memory_order_relaxed);
+        }
+        frame.color_frame = output.get_color_frame();
+        frame.depth_frame = output.get_depth_frame();
+        if (!frame.color_frame || !frame.depth_frame) {
+            return false;
+        }
+        if (filter_) {
+            const auto started = std::chrono::steady_clock::now();
+            frame.depth_frame = spatial_filter_.process(frame.depth_frame);
+            frame.depth_frame = temporal_filter_.process(frame.depth_frame);
+            filter_ns_.fetch_add(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - started).count()),
+                std::memory_order_relaxed);
+        }
+        const auto depth_video = frame.depth_frame.as<rs2::video_frame>();
+        frame.depth_image_raw = cv::Mat(
+            cv::Size(depth_video.get_width(), depth_video.get_height()),
+            CV_16UC1,
+            const_cast<void*>(depth_video.get_data()));
+        depth_processed_count_.fetch_add(1, std::memory_order_relaxed);
+    } else if (frame.has_depth) {
+        depth_skipped_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const auto color_video = frame.color_frame.as<rs2::video_frame>();
+    frame.color_image = cv::Mat(
+        cv::Size(color_video.get_width(), color_video.get_height()),
+        CV_8UC3,
+        const_cast<void*>(color_video.get_data()));
+    const auto count = processed_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count % 300 == 0) {
+        const auto depth_processed = depth_processed_count_.load(std::memory_order_relaxed);
+        std::cout << "[realsense] processed=" << count
+                  << " depth_processed=" << depth_processed
+                  << " depth_skipped=" << depth_skipped_count_.load(std::memory_order_relaxed)
+                  << " avg_align_ms="
+                  << (depth_processed ? static_cast<double>(align_ns_.load()) / depth_processed / 1.0e6 : 0.0)
+                  << " avg_filter_ms="
+                  << (depth_processed ? static_cast<double>(filter_ns_.load()) / depth_processed / 1.0e6 : 0.0)
+                  << std::endl;
+    }
+    return true;
+}
+
 void RealSenseProducer::clear_rgbd()
 {
     std::lock_guard<std::mutex> lock(rgb_mutex_);
@@ -372,13 +458,19 @@ void RealSenseProducer::run()
         stop();
         return;
     }
-    if (on_scale_) {
+    if (!depth_stream_enabled_ && sync_mode_ != 0) {
+        std::cerr << "[realsense] depth stream is disabled; depth-based hardware sync "
+                     "will not participate in capture" << std::endl;
+    }
+    if (on_scale_ && depth_stream_enabled_) {
         on_scale_(depth_sensor.get_depth_scale());
     }
 
     rs2::color_sensor color_sensor = dev.first<rs2::color_sensor>();
     configure_frames_queue_size(color_sensor, rgbd_max_, "color");
-    configure_frames_queue_size(depth_sensor, rgbd_max_, "depth");
+    if (depth_stream_enabled_) {
+        configure_frames_queue_size(depth_sensor, rgbd_max_, "depth");
+    }
 
     rs2::sensor motion_sensor;
     bool imu_started = false;
@@ -443,16 +535,15 @@ void RealSenseProducer::run()
     rs2::config cfg;
     if (!dev_.empty()) cfg.enable_device(dev_);
     cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_BGR8, camera_fps_);
-    cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, camera_fps_);
+    if (depth_stream_enabled_) {
+        cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, camera_fps_);
+    }
 
-    rs2::align align_to_color(RS2_STREAM_COLOR);
-    rs2::spatial_filter spatial_filter;
-    rs2::temporal_filter temporal_filter;
     if (filter_) {
-        spatial_filter.set_option(RS2_OPTION_FILTER_MAGNITUDE, 2.0f);
-        spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.5f);
-        spatial_filter.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 20.0f);
-        spatial_filter.set_option(RS2_OPTION_HOLES_FILL, 0);
+        spatial_filter_.set_option(RS2_OPTION_FILTER_MAGNITUDE, 2.0f);
+        spatial_filter_.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.5f);
+        spatial_filter_.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 20.0f);
+        spatial_filter_.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
     try {
@@ -503,49 +594,40 @@ void RealSenseProducer::run()
             continue;
         }
 
-        rs2::frameset out = frameset;
-        if (align_) out = align_to_color.process(out);
-
-        rs2::video_frame color_f = out.get_color_frame();
+        rs2::video_frame color_f = frameset.get_color_frame();
         const auto color_host_now = std::chrono::system_clock::now();
         const auto color_host_s = std::chrono::duration_cast<std::chrono::seconds>(color_host_now.time_since_epoch());
         const long color_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             color_host_now.time_since_epoch() - color_host_s).count();
 
-        const rs2::depth_frame raw_depth_f = out.get_depth_frame();
-        rs2::depth_frame depth_f = raw_depth_f;
+        rs2::frame depth_f;
+        if (depth_stream_enabled_) {
+            depth_f = frameset.get_depth_frame();
+        }
         const auto depth_host_now = std::chrono::system_clock::now();
         const auto depth_host_s = std::chrono::duration_cast<std::chrono::seconds>(depth_host_now.time_since_epoch());
         const long depth_host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             depth_host_now.time_since_epoch() - depth_host_s).count();
 
-        if (!color_f || !depth_f) continue;
-
-        if (filter_) {
-            depth_f = spatial_filter.process(depth_f);
-            depth_f = temporal_filter.process(depth_f);
-        }
+        if (!color_f || (depth_stream_enabled_ && !depth_f)) continue;
 
         const double color_ts_ms = color_f.get_timestamp();
-        const double depth_ts_ms = depth_f.get_timestamp();
+        const double depth_ts_ms = depth_f ? depth_f.get_timestamp() : 0.0;
         if (!std::isfinite(color_ts_ms) || color_ts_ms < 0.0 ||
-            !std::isfinite(depth_ts_ms) || depth_ts_ms < 0.0) {
+            (depth_f && (!std::isfinite(depth_ts_ms) || depth_ts_ms < 0.0))) {
             continue;
         }
 
         const uint64_t color_sensor_ns = static_cast<uint64_t>(color_ts_ms * 1.0e6);
-        const uint64_t depth_sensor_ns = static_cast<uint64_t>(depth_ts_ms * 1.0e6);
+        const uint64_t depth_sensor_ns = depth_f
+            ? static_cast<uint64_t>(depth_ts_ms * 1.0e6)
+            : 0;
         const uint64_t color_frame_number = color_f.get_frame_number();
-        const uint64_t depth_frame_number = depth_f.get_frame_number();
+        const uint64_t depth_frame_number = depth_f ? depth_f.get_frame_number() : 0;
         const long color_sensor_sec = static_cast<long>(color_sensor_ns / 1000000000ULL);
         const long color_sensor_usec = static_cast<long>((color_sensor_ns % 1000000000ULL) / 1000ULL);
         const long depth_sensor_sec = static_cast<long>(depth_sensor_ns / 1000000000ULL);
         const long depth_sensor_usec = static_cast<long>((depth_sensor_ns % 1000000000ULL) / 1000ULL);
-
-        const int w = color_f.get_width();
-        const int h = color_f.get_height();
-        cv::Mat rgb(cv::Size(w, h), CV_8UC3, (void*)color_f.get_data());
-        cv::Mat depth(cv::Size(w, h), CV_16UC1, (void*)depth_f.get_data());
 
         std::uint64_t last_color_frame_number = 0;
         std::uint64_t last_depth_frame_number = 0;
@@ -558,7 +640,7 @@ void RealSenseProducer::run()
         }
 
         const bool new_color = color_frame_number > last_color_frame_number;
-        const bool new_depth = depth_frame_number > last_depth_frame_number;
+        const bool new_depth = !depth_stream_enabled_ || depth_frame_number > last_depth_frame_number;
         if (!new_color || !new_depth) {
             continue;
         }
@@ -566,16 +648,18 @@ void RealSenseProducer::run()
         const std::uint32_t trigger_step = tracking_initialized
             ? static_cast<std::uint32_t>(std::max<std::uint64_t>(
                   1ULL,
-                  std::max(
+                  std::max<std::uint64_t>(
                       color_frame_number - last_color_frame_number,
-                      depth_frame_number - last_depth_frame_number)))
+                      depth_stream_enabled_
+                          ? depth_frame_number - last_depth_frame_number
+                          : 1ULL)))
             : 1U;
 
         bool has_frame_temperature = false;
         try {
-            if (raw_depth_f.supports_frame_metadata(RS2_FRAME_METADATA_TEMPERATURE)) {
+            if (depth_f && depth_f.supports_frame_metadata(RS2_FRAME_METADATA_TEMPERATURE)) {
                 cached_temperature_celsius = static_cast<float>(
-                    raw_depth_f.get_frame_metadata(RS2_FRAME_METADATA_TEMPERATURE));
+                    depth_f.get_frame_metadata(RS2_FRAME_METADATA_TEMPERATURE));
                 has_frame_temperature = true;
             }
         } catch (const rs2::error&) {
@@ -595,22 +679,24 @@ void RealSenseProducer::run()
             }
         }
 
-        if (!push_rgbd(StampedRealSenseFrame{
-                rgb.clone(),
-                depth.clone(),
-                color_frame_number,
-                depth_frame_number,
-                trigger_step,
-                color_host_s.count(),
-                color_host_ns,
-                color_sensor_sec,
-                color_sensor_usec,
-                depth_host_s.count(),
-                depth_host_ns,
-                depth_sensor_sec,
-                depth_sensor_usec,
-                0,
-                cached_temperature_celsius})) {
+        StampedRealSenseFrame frame;
+        frame.frameset = frameset;
+        frame.color_frame = color_f;
+        frame.depth_frame = depth_f;
+        frame.color_frame_number = color_frame_number;
+        frame.depth_frame_number = depth_frame_number;
+        frame.has_depth = static_cast<bool>(depth_f);
+        frame.trigger_step = trigger_step;
+        frame.color_host_sec = color_host_s.count();
+        frame.color_host_nanosec = color_host_ns;
+        frame.color_sensor_sec = color_sensor_sec;
+        frame.color_sensor_microsec = color_sensor_usec;
+        frame.depth_host_sec = depth_f ? depth_host_s.count() : 0;
+        frame.depth_host_nanosec = depth_f ? depth_host_ns : 0;
+        frame.depth_sensor_sec = depth_sensor_sec;
+        frame.depth_sensor_microsec = depth_sensor_usec;
+        frame.temperature_celsius = cached_temperature_celsius;
+        if (!push_rgbd(std::move(frame))) {
             break;
         }
 

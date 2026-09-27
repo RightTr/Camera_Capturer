@@ -49,6 +49,7 @@ void consumer(int id)
     while (!quitFlag.load()) {
         GuideFrame frame;
         if (!guides[id]->pop(frame)) break;
+        if (!guides[id]->materialize(frame)) continue;
 
         if (tempIncre[id].exchange(false)) count = 0;
         if (if_save && count < 30) {   

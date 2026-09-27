@@ -107,6 +107,9 @@ int main(int argc, char** argv)
         if (!producer->pop(frame)) {
             break;
         }
+        if (!producer->materialize(frame)) {
+            continue;
+        }
 
         if (writer) {
             writer->write(frame);

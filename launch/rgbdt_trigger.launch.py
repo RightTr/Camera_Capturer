@@ -22,6 +22,8 @@ def generate_launch_description():
     trigger_line = LaunchConfiguration("trigger_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     enable_guide_temperature = LaunchConfiguration("enable_guide_temperature")
+    depth_stream_enable = LaunchConfiguration("depth_stream_enable")
+    depth_processing_enable = LaunchConfiguration("depth_processing_enable")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -94,6 +96,16 @@ def generate_launch_description():
             description="Enable Guide temperature conversion and temperature topic publishing.",
         ),
         DeclareLaunchArgument(
+            "depth_stream_enable",
+            default_value="true",
+            description="Enable the RealSense depth stream.",
+        ),
+        DeclareLaunchArgument(
+            "depth_processing_enable",
+            default_value="true",
+            description="Process, publish, and save depth after trigger matching.",
+        ),
+        DeclareLaunchArgument(
             "use_rviz",
             default_value="false",
             description="Launch RViz with the packaged rgbdt.rviz config.",
@@ -117,6 +129,8 @@ def generate_launch_description():
                 "trigger_line": trigger_line,
                 "sync_queue_size": sync_queue_size,
                 "enable_guide_temperature": ParameterValue(enable_guide_temperature, value_type=bool),
+                "depth_stream_enable": ParameterValue(depth_stream_enable, value_type=bool),
+                "depth_processing_enable": ParameterValue(depth_processing_enable, value_type=bool),
             }],
         ),
         Node(

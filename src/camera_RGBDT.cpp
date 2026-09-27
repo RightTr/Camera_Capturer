@@ -71,6 +71,8 @@ void stereo_consumer()
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
         if (!output_enabled()) continue;
+        if (!guides[0]->materialize(left_frame) ||
+            !guides[1]->materialize(right_frame)) continue;
         if (if_save) {
             guide_writers[0]->write(left_frame);
             guide_writers[1]->write(right_frame);
@@ -85,6 +87,7 @@ void realsense_consumer() {
         StampedRealSenseFrame frame;
         if (!rs_prod->pop_rgbd(frame)) break;
         if (!output_enabled()) continue;
+        if (!rs_prod->process_rgbd(frame)) continue;
         if (if_save) rs_writer->write_rgbd(frame);
         show_realsense_frame(frame);
     }

@@ -430,6 +430,10 @@ void guide_consumer(int cam_id)
             continue;
         }
 
+        if (!guides[cam_id]->materialize(frame)) {
+            continue;
+        }
+
         flush_time_rows();
         frame.trigger_unix_ns = trigger_ns;
         if (if_save) {

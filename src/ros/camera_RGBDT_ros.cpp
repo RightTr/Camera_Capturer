@@ -26,6 +26,7 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 
 int if_save = 0;
 int rs_sync_mode = 0;
+bool g_depth_processing_enabled = true;
 
 std::atomic<bool> quitFlag(false);
 
@@ -198,6 +199,10 @@ void stereo_consumer()
         if (!output_enabled()) {
             continue;
         }
+        if (!guides[0]->materialize(left_frame) ||
+            !guides[1]->materialize(right_frame)) {
+            continue;
+        }
 
         if (if_save) {
             {
@@ -242,6 +247,9 @@ void realsense_consumer()
         if (!output_enabled()) {
             continue;
         }
+        if (!rs_prod->process_rgbd(rs_frame)) {
+            continue;
+        }
 
         if (if_save) {
             {
@@ -252,18 +260,20 @@ void realsense_consumer()
                 const std::int64_t color_sensor_ns = to_ns_from_sec_usec(
                     rs_frame.color_sensor_sec,
                     rs_frame.color_sensor_microsec);
-                const std::int64_t depth_host_ns = to_ns_from_sec_nsec(
-                    rs_frame.depth_host_sec,
-                    rs_frame.depth_host_nanosec);
-                const std::int64_t depth_sensor_ns = to_ns_from_sec_usec(
-                    rs_frame.depth_sensor_sec,
-                    rs_frame.depth_sensor_microsec);
                 rs_time_queue.push_back({
                     frame_index(color_host_ns, rs_base_host_ns),
                     format_timestamp_ns(color_sensor_ns),
                     format_timestamp_ns(color_host_ns),
-                    format_timestamp_ns(depth_sensor_ns),
-                    format_timestamp_ns(depth_host_ns),
+                    rs_frame.has_depth
+                        ? format_timestamp_ns(to_ns_from_sec_usec(
+                              rs_frame.depth_sensor_sec,
+                              rs_frame.depth_sensor_microsec))
+                        : std::string{},
+                    rs_frame.has_depth
+                        ? format_timestamp_ns(to_ns_from_sec_nsec(
+                              rs_frame.depth_host_sec,
+                              rs_frame.depth_host_nanosec))
+                        : std::string{},
                 });
                 write_times();
             }
@@ -277,7 +287,9 @@ void realsense_consumer()
             rs_frame.depth_sensor_sec,
             rs_frame.depth_sensor_microsec);
         publish_image(g_rs_rgb_pub, rs_frame.color_image, "bgr8", "realsense_color", color_stamp);
-        publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", depth_stamp);
+        if (g_depth_processing_enabled && !rs_frame.depth_image_raw.empty()) {
+            publish_image(g_rs_depth_pub, rs_frame.depth_image_raw, "16UC1", "realsense_depth", depth_stamp);
+        }
     }
 
     if (!quitFlag.load()) {
@@ -357,12 +369,17 @@ int main(int argc, char **argv)
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
     const int warmup = get_param<int>("warmup", 10);
+    const bool depth_stream_enable = get_param<bool>("depth_stream_enable", true);
+    g_depth_processing_enabled =
+        get_param<bool>("depth_processing_enable", true) && depth_stream_enable;
     g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 5);
     g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 5);
     g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 5);
     g_guide_temp_pubs[1] = advertise<ImageMsg>("guide_right/temperature", 5);
     g_rs_rgb_pub = advertise<ImageMsg>("realsense/rgb/image", 5);
-    g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
+    if (g_depth_processing_enabled) {
+        g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 5);
+    }
     g_rs_accel_pub = advertise<ImuMsg>("realsense/imu/accel", 50);
     g_rs_gyro_pub = advertise<ImuMsg>("realsense/imu/gyro", 200);
     auto sync_sub = subscribe<Int32Msg>(
@@ -424,6 +441,8 @@ int main(int argc, char **argv)
     rs_prod->set_imu_fps(imu_fps);
     rs_prod->set_imu_csv_enabled(if_save != 0);
     rs_prod->set_imu_queue_size(imu_queue_size);
+    rs_prod->set_depth_stream_enabled(depth_stream_enable);
+    rs_prod->set_depth_processing_enabled(g_depth_processing_enabled);
 
     std::vector<std::thread> producers;
     producers.emplace_back([]() { rs_prod->run(); });

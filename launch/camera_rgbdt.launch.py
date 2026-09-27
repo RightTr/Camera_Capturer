@@ -4,6 +4,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -16,6 +17,8 @@ def generate_launch_description():
     imu_fps = LaunchConfiguration("imu_fps")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
     warmup = LaunchConfiguration("warmup")
+    depth_stream_enable = LaunchConfiguration("depth_stream_enable")
+    depth_processing_enable = LaunchConfiguration("depth_processing_enable")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -63,6 +66,16 @@ def generate_launch_description():
             description="Seconds to wait after RealSense is ready before output starts.",
         ),
         DeclareLaunchArgument(
+            "depth_stream_enable",
+            default_value="true",
+            description="Enable the RealSense depth stream.",
+        ),
+        DeclareLaunchArgument(
+            "depth_processing_enable",
+            default_value="true",
+            description="Process, publish, and save RealSense depth frames.",
+        ),
+        DeclareLaunchArgument(
             "use_rviz",
             default_value="false",
             description="Launch RViz with the packaged rgbdt.rviz config.",
@@ -81,6 +94,8 @@ def generate_launch_description():
                 "imu_fps": imu_fps,
                 "imu_queue_size": imu_queue_size,
                 "warmup": warmup,
+                "depth_stream_enable": ParameterValue(depth_stream_enable, value_type=bool),
+                "depth_processing_enable": ParameterValue(depth_processing_enable, value_type=bool),
             }],
         ),
         Node(

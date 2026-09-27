@@ -23,6 +23,30 @@ struct GuideBuffer {
     size_t length;
 };
 
+struct GuideCaptureState;
+
+class GuideBufferLease {
+public:
+    GuideBufferLease() = default;
+    ~GuideBufferLease();
+    GuideBufferLease(GuideBufferLease&& other) noexcept;
+    GuideBufferLease& operator=(GuideBufferLease&& other) noexcept;
+    GuideBufferLease(const GuideBufferLease&) = delete;
+    GuideBufferLease& operator=(const GuideBufferLease&) = delete;
+
+    void* data() const;
+    std::size_t size() const;
+    explicit operator bool() const { return state_ != nullptr; }
+
+private:
+    friend class GuideProducer;
+    GuideBufferLease(std::shared_ptr<GuideCaptureState> state, unsigned int index);
+    void reset();
+
+    std::shared_ptr<GuideCaptureState> state_;
+    unsigned int index_ = 0;
+};
+
 struct ParamData {
     uint16_t humidity;
     uint16_t distance_x10;
@@ -73,6 +97,7 @@ struct ParamData {
 
 struct GuideFrame {
     int cam_id;
+    GuideBufferLease buffer;
     cv::Mat gray_image;
     cv::Mat temperature_celsius;
     ParamData param_data;
@@ -97,7 +122,13 @@ public:
         SYNC_OFF,
         QUERY
     };
-    static int init_camera(const char *device_name, int *fd, GuideBuffer** buffers, int width, int height);
+    static int init_camera(
+        const char *device_name,
+        int *fd,
+        GuideBuffer** buffers,
+        unsigned int* buffer_count,
+        int width,
+        int height);
     static const char* camera_name(int cam_id);
     static std::unique_ptr<GuideProducer> create_from_device(
         int cam_id,
@@ -120,6 +151,7 @@ public:
         int cam_id,
         int fd,
         GuideBuffer* buffers,
+        unsigned int buffer_count,
         std::function<bool()> running,
         std::function<void()> fail = {});
     ~GuideProducer();
@@ -130,6 +162,7 @@ public:
     void set_serial_query_time(int interval_ms);
     void run();
     bool pop(GuideFrame& frame);
+    bool materialize(GuideFrame& frame) const;
     bool pop_temperature(GuideTemperature& temperature);
     void clear();
     void stop();
@@ -181,4 +214,7 @@ private:
     std::thread serial_query_thread_;
     bool capture_started_{false};
     bool capture_cleaned_{false};
+    std::shared_ptr<GuideCaptureState> capture_state_;
+    mutable std::atomic<std::uint64_t> materialize_count_{0};
+    mutable std::atomic<std::uint64_t> materialize_ns_{0};
 };

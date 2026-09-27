@@ -49,7 +49,105 @@ cv::Mat temp_mat(const cv::Mat& src, bool tenfold)
 
 }  // namespace
 
-int GuideProducer::init_camera(const char *device_name, int *fd, GuideBuffer** buffers, int width, int height)
+struct GuideCaptureState {
+    int fd = -1;
+    GuideBuffer* buffers = nullptr;
+    unsigned int buffer_count = 0;
+    bool streaming = false;
+    std::mutex ioctl_mutex;
+
+    ~GuideCaptureState()
+    {
+        if (buffers) {
+            for (unsigned int i = 0; i < buffer_count; ++i) {
+                if (buffers[i].start && buffers[i].start != MAP_FAILED) {
+                    munmap(buffers[i].start, buffers[i].length);
+                }
+            }
+            free(buffers);
+        }
+        if (fd >= 0) {
+            close(fd);
+        }
+    }
+
+    void release(unsigned int index)
+    {
+        std::lock_guard<std::mutex> lock(ioctl_mutex);
+        if (!streaming || fd < 0 || index >= buffer_count) {
+            return;
+        }
+        struct v4l2_buffer buf;
+        std::memset(&buf, 0, sizeof(buf));
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = index;
+        int result;
+        do {
+            result = ioctl(fd, VIDIOC_QBUF, &buf);
+        } while (result < 0 && errno == EINTR && streaming);
+        if (result < 0 && streaming) {
+            perror("Queue leased Guide buffer");
+        }
+    }
+};
+
+GuideBufferLease::GuideBufferLease(
+    std::shared_ptr<GuideCaptureState> state,
+    unsigned int index)
+    : state_(std::move(state)), index_(index)
+{
+}
+
+GuideBufferLease::~GuideBufferLease()
+{
+    reset();
+}
+
+GuideBufferLease::GuideBufferLease(GuideBufferLease&& other) noexcept
+    : state_(std::move(other.state_)), index_(other.index_)
+{
+}
+
+GuideBufferLease& GuideBufferLease::operator=(GuideBufferLease&& other) noexcept
+{
+    if (this != &other) {
+        reset();
+        state_ = std::move(other.state_);
+        index_ = other.index_;
+    }
+    return *this;
+}
+
+void GuideBufferLease::reset()
+{
+    if (state_) {
+        state_->release(index_);
+        state_.reset();
+    }
+}
+
+void* GuideBufferLease::data() const
+{
+    return state_ && index_ < state_->buffer_count
+        ? state_->buffers[index_].start
+        : nullptr;
+}
+
+std::size_t GuideBufferLease::size() const
+{
+    return state_ && index_ < state_->buffer_count
+        ? state_->buffers[index_].length
+        : 0;
+}
+
+int GuideProducer::init_camera(
+    const char *device_name,
+    int *fd,
+    GuideBuffer** buffers,
+    unsigned int* buffer_count,
+    int width,
+    int height)
 {
     *fd = open(device_name, O_RDWR);
     if (*fd == -1) {
@@ -82,6 +180,13 @@ int GuideProducer::init_camera(const char *device_name, int *fd, GuideBuffer** b
         close(*fd);
         return EXIT_FAILURE;
     }
+    if (req.count < 3) {
+        std::cerr << "Guide capture requires at least 3 mmap buffers, got "
+                  << req.count << std::endl;
+        close(*fd);
+        return EXIT_FAILURE;
+    }
+    *buffer_count = req.count;
 
     *buffers = static_cast<GuideBuffer*>(calloc(req.count, sizeof(**buffers)));
     if (!*buffers) {
@@ -147,7 +252,8 @@ std::unique_ptr<GuideProducer> GuideProducer::create_from_device(
 {
     int fd = -1;
     GuideBuffer* buffers = nullptr;
-    if (init_camera(device_name, &fd, &buffers, 1280, 513) != 0) {
+    unsigned int buffer_count = 0;
+    if (init_camera(device_name, &fd, &buffers, &buffer_count, 1280, 513) != 0) {
         return nullptr;
     }
 
@@ -155,6 +261,7 @@ std::unique_ptr<GuideProducer> GuideProducer::create_from_device(
         cam_id,
         fd,
         buffers,
+        buffer_count,
         std::move(running),
         std::move(fail));
 }
@@ -206,20 +313,33 @@ GuideProducer::GuideProducer(
     int cam_id,
     int fd,
     GuideBuffer* buffers,
+    unsigned int buffer_count,
     std::function<bool()> running,
     std::function<void()> fail)
     : cam_id_(cam_id),
       fd_(fd),
       buffers_(buffers),
+      buffer_count_(buffer_count),
       running_(std::move(running)),
       fail_(std::move(fail))
 {
+    max_size_ = std::max(1, static_cast<int>(buffer_count_) - 2);
+    capture_state_ = std::make_shared<GuideCaptureState>();
+    capture_state_->fd = fd_;
+    capture_state_->buffers = buffers_;
+    capture_state_->buffer_count = buffer_count_;
 }
 
 GuideProducer::~GuideProducer()
 {
     stop();
     cleanup_capture();
+    const auto count = materialize_count_.load(std::memory_order_relaxed);
+    const auto total_ns = materialize_ns_.load(std::memory_order_relaxed);
+    std::cout << "[guide " << camera_name(cam_id_) << "] materialized=" << count
+              << " avg_materialize_ms="
+              << (count ? static_cast<double>(total_ns) / count / 1.0e6 : 0.0)
+              << std::endl;
 }
 
 void GuideProducer::set_tenfold_celsius(bool tenfold_celsius)
@@ -234,7 +354,7 @@ void GuideProducer::set_temperature_enabled(bool enabled)
 
 void GuideProducer::set_max_queue_size(int max_size)
 {
-    max_size_ = max_size;
+    max_size_ = std::max(1, std::min(max_size, static_cast<int>(buffer_count_) - 2));
 }
 
 void GuideProducer::set_serial_query_time(int interval_ms)
@@ -287,6 +407,44 @@ bool GuideProducer::pop(GuideFrame& frame)
     queue_.pop();
     lock.unlock();
     cv_.notify_one();
+    return true;
+}
+
+bool GuideProducer::materialize(GuideFrame& frame) const
+{
+    if (!frame.buffer || !frame.buffer.data()) {
+        return false;
+    }
+    if (!frame.gray_image.empty()) {
+        return true;
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    auto* data = static_cast<char*>(frame.buffer.data());
+    cv::Mat raw(kHeight, kWidth * 2, CV_8UC2, data);
+    frame.param_data.parse(data + kParamOffset);
+    cv::cvtColor(
+        raw(cv::Rect(kWidth, 0, kWidth, kHeight)),
+        frame.gray_image,
+        cv::COLOR_YUV2GRAY_YUY2);
+    if (temperature_enabled_) {
+        frame.temperature_celsius = temp_mat(
+            raw(cv::Rect(0, 0, kWidth, kHeight)),
+            tenfold_celsius_);
+    }
+    frame.buffer.reset();
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    materialize_ns_.fetch_add(static_cast<std::uint64_t>(elapsed), std::memory_order_relaxed);
+    const auto count = materialize_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count % 300 == 0) {
+        std::cout << "[guide " << camera_name(cam_id_) << "] materialized=" << count
+                  << " avg_materialize_ms="
+                  << static_cast<double>(materialize_ns_.load(std::memory_order_relaxed)) /
+                         count / 1.0e6
+                  << std::endl;
+    }
     return true;
 }
 
@@ -375,12 +533,7 @@ void GuideProducer::run()
             frame.sensor_sec = buf.timestamp.tv_sec;
             frame.sensor_microsec = buf.timestamp.tv_usec;
 
-            cv::Mat raw(kHeight, kWidth * 2, CV_8UC2, buffers_[buf.index].start);
-            frame.param_data.parse(static_cast<char*>(buffers_[buf.index].start) + kParamOffset);
-            cv::cvtColor(raw(cv::Rect(kWidth, 0, kWidth, kHeight)), frame.gray_image, cv::COLOR_YUV2GRAY_YUY2);
-            if (temperature_enabled_) {
-                frame.temperature_celsius = temp_mat(raw(cv::Rect(0, 0, kWidth, kHeight)), tenfold_celsius_);
-            }
+            frame.buffer = GuideBufferLease(capture_state_, buf.index);
 
             const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
             frame.host_sec = sec.count();
@@ -391,17 +544,8 @@ void GuideProducer::run()
                 break;
             }
             last = now;
-        }
-
-        int queue_result = -1;
-        do {
-            queue_result = ioctl(fd_, VIDIOC_QBUF, &buf);
-        } while (queue_result < 0 && errno == EINTR && live());
-        if (queue_result < 0) {
-            if (!live()) break;
-            perror(("Queue Buffer " + name).c_str());
-            if (fail_) fail_();
-            break;
+        } else {
+            capture_state_->release(buf.index);
         }
     }
 
@@ -417,6 +561,10 @@ int GuideProducer::start_capture()
         return -1;
     }
     capture_started_ = true;
+    {
+        std::lock_guard<std::mutex> lock(capture_state_->ioctl_mutex);
+        capture_state_->streaming = true;
+    }
     return 0;
 }
 
@@ -428,24 +576,13 @@ void GuideProducer::cleanup_capture()
     capture_cleaned_ = true;
 
     if (capture_started_ && fd_ >= 0) {
+        {
+            std::lock_guard<std::mutex> lock(capture_state_->ioctl_mutex);
+            capture_state_->streaming = false;
+        }
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl(fd_, VIDIOC_STREAMOFF, &type);
         capture_started_ = false;
-    }
-
-    if (buffers_) {
-        for (unsigned int i = 0; i < buffer_count_; ++i) {
-            if (buffers_[i].start && buffers_[i].start != MAP_FAILED) {
-                munmap(buffers_[i].start, buffers_[i].length);
-            }
-        }
-        free(buffers_);
-        buffers_ = nullptr;
-    }
-
-    if (fd_ >= 0) {
-        close(fd_);
-        fd_ = -1;
     }
 }
 

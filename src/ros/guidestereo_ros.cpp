@@ -47,6 +47,8 @@ void stereo_publisher(const std::vector<ImagePublisher>& image_pubs,
         GuideFrame right_frame;
         if (!guides[0]->pop(left_frame)) break;
         if (!guides[1]->pop(right_frame)) break;
+        if (!guides[0]->materialize(left_frame) ||
+            !guides[1]->materialize(right_frame)) continue;
 
         if (if_save) {
             if (time_stream.is_open()) {
