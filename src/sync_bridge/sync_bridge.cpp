@@ -143,7 +143,7 @@ void SyncBridge::stop()
     const auto diff = static_cast<std::int64_t>(pwm_count) -
                       static_cast<std::int64_t>(serial_count);
     std::printf("[Sync Summary]\n");
-    std::printf("PWM     : %llu\n",
+    std::printf("Trigger : %llu\n",
                 static_cast<unsigned long long>(pwm_count));
     std::printf("Serial  : %llu\n",
                 static_cast<unsigned long long>(serial_count));
@@ -513,7 +513,7 @@ void SyncBridge::gpio_loop()
         if (print_stats) {
             const auto diff = static_cast<std::int64_t>(stats_snapshot.pwm_count) -
                               static_cast<std::int64_t>(stats_snapshot.serial_count);
-            std::printf("[sync] pwm=%llu serial=%llu matched=%llu serial_q=%zu gpio_q=%zu trigger_q=%zu diff=%lld\n",
+            std::printf("[sync] trigger=%llu serial=%llu matched=%llu serial_q=%zu gpio_q=%zu trigger_q=%zu diff=%lld\n",
                         static_cast<unsigned long long>(stats_snapshot.pwm_count),
                         static_cast<unsigned long long>(stats_snapshot.serial_count),
                         static_cast<unsigned long long>(stats_snapshot.matched_count),
