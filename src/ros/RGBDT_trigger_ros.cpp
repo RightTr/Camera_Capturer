@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -80,6 +81,12 @@ void request_stop(const char* reason)
     if (!quitFlag.exchange(true)) {
         std::cerr << "[STOP] " << reason << std::endl;
     }
+    time_cv.notify_all();
+}
+
+void stop_capture_quietly()
+{
+    quitFlag.store(true, std::memory_order_relaxed);
     time_cv.notify_all();
 }
 
@@ -323,11 +330,6 @@ void signal_handler(int)
     request_stop("Signal received");
 }
 
-void stop_capture(const char* reason)
-{
-    request_stop(reason);
-}
-
 void stop_components()
 {
     if (sync_bridge) {
@@ -355,6 +357,34 @@ bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::cond
     return ready.load(std::memory_order_relaxed) && !quitFlag.load();
 }
 
+void reset_capture_state();
+
+bool handle_warmup_reset(std::uint64_t& seen_gen)
+{
+    if (!output_enabled() || g_warmup_done.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_warmup_mutex);
+    if (g_warmup_done.load(std::memory_order_relaxed) || !output_enabled()) {
+        return false;
+    }
+
+    reset_capture_state();
+    seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    return true;
+}
+
+void finish_guide_row(TimeRow& row, bool left)
+{
+    auto& sensor_time = left ? row.left_sensor_time : row.right_sensor_time;
+    auto& host_time = left ? row.left_host_time : row.right_host_time;
+    auto& done = left ? row.left_done : row.right_done;
+    sensor_time.clear();
+    host_time.clear();
+    done = true;
+}
+
 TimeRow* wait_for_row_locked(std::unique_lock<std::mutex>& lock, std::uint64_t cursor_id, std::uint64_t seen_gen)
 {
     const auto deadline = std::chrono::steady_clock::now() +
@@ -375,11 +405,10 @@ TimeRow* wait_for_row_locked(std::unique_lock<std::mutex>& lock, std::uint64_t c
 
 void reset_capture_state()
 {
-    if (guides[0]) {
-        guides[0]->clear();
-    }
-    if (guides[1]) {
-        guides[1]->clear();
+    for (auto& guide : guides) {
+        if (guide) {
+            guide->clear();
+        }
     }
     if (rs_prod) {
         rs_prod->clear_rgbd();
@@ -404,8 +433,7 @@ void guide_consumer(int cam_id)
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
     std::uint64_t cursor_id = 0;
-    bool have_offset = false;
-    std::int64_t sequence_offset = 0;
+    std::optional<std::int64_t> sequence_offset;
 
     while (!quitFlag.load()) {
         GuideFrame frame;
@@ -413,23 +441,17 @@ void guide_consumer(int cam_id)
             break;
         }
 
-        if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
-            std::lock_guard<std::mutex> lock(g_warmup_mutex);
-            if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
-                reset_capture_state();
-                seen_gen = g_warmup_gen.load(std::memory_order_acquire);
-                cursor_id = 0;
-                have_offset = false;
-                continue;
-            }
+        if (handle_warmup_reset(seen_gen)) {
+            cursor_id = 0;
+            sequence_offset.reset();
+            continue;
         }
 
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
             cursor_id = 0;
-            have_offset = false;
-            cursor_id = 0;
+            sequence_offset.reset();
         }
 
         if (!output_enabled()) {
@@ -438,33 +460,21 @@ void guide_consumer(int cam_id)
 
         const bool is_left = cam_id == 0;
         std::int64_t trigger_ns = 0;
-        bool assigned = false;
         {
             std::unique_lock<std::mutex> lock(time_mutex);
-            TimeRow* row = wait_for_row_locked(lock, cursor_id, seen_gen);
-            if (!row) {
-                continue;
-            }
-
-            if (!have_offset) {
+            TimeRow* row = nullptr;
+            if (!sequence_offset) {
+                row = wait_for_row_locked(lock, cursor_id, seen_gen);
+                if (!row) continue;
                 sequence_offset = static_cast<std::int64_t>(cursor_id) -
                     static_cast<std::int64_t>(frame.sequence);
-                have_offset = true;
             }
-            const std::int64_t expected_id = static_cast<std::int64_t>(frame.sequence) + sequence_offset;
+            const std::int64_t expected_id = static_cast<std::int64_t>(frame.sequence) + *sequence_offset;
             if (expected_id < 0) continue;
             while (cursor_id < static_cast<std::uint64_t>(expected_id)) {
                 row = wait_for_row_locked(lock, cursor_id, seen_gen);
                 if (!row) break;
-                if (is_left) {
-                    row->left_sensor_time.clear();
-                    row->left_host_time.clear();
-                    row->left_done = true;
-                } else {
-                    row->right_sensor_time.clear();
-                    row->right_host_time.clear();
-                    row->right_done = true;
-                }
+                finish_guide_row(*row, is_left);
                 ++cursor_id;
             }
             if (cursor_id != static_cast<std::uint64_t>(expected_id)) continue;
@@ -474,30 +484,21 @@ void guide_consumer(int cam_id)
             }
 
             if (!row->valid) {
-                if (is_left) row->left_done = true;
-                else row->right_done = true;
+                finish_guide_row(*row, is_left);
                 ++cursor_id;
                 time_cv.notify_all();
                 continue;
             }
 
-            if (is_left) {
-                row->left_sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
-                row->left_host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-                row->left_done = true;
-            } else {
-                row->right_sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
-                row->right_host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-                row->right_done = true;
-            }
+            auto& sensor_time = is_left ? row->left_sensor_time : row->right_sensor_time;
+            auto& host_time = is_left ? row->left_host_time : row->right_host_time;
+            auto& done = is_left ? row->left_done : row->right_done;
+            sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
+            host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
+            done = true;
             trigger_ns = row->trigger_output_unix_ns;
             ++cursor_id;
-            assigned = true;
             time_cv.notify_all();
-        }
-
-        if (!assigned) {
-            continue;
         }
 
         if (!guides[cam_id]->materialize(frame)) {
@@ -528,7 +529,7 @@ void guide_consumer(int cam_id)
     }
 
     if (!quitFlag.load()) {
-        stop_capture("Guide image consumer stopped");
+        request_stop("Guide image consumer stopped");
     }
 }
 
@@ -536,8 +537,7 @@ void realsense_consumer()
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
     std::uint64_t cursor_id = 0;
-    bool have_offset = false;
-    std::int64_t sequence_offset = 0;
+    std::optional<std::int64_t> frame_offset;
 
     for (;;) {
         StampedRealSenseFrame frame;
@@ -545,23 +545,17 @@ void realsense_consumer()
             break;
         }
 
-        if (output_enabled() && !g_warmup_done.load(std::memory_order_acquire)) {
-            std::lock_guard<std::mutex> lock(g_warmup_mutex);
-            if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
-                reset_capture_state();
-                seen_gen = g_warmup_gen.load(std::memory_order_acquire);
-                cursor_id = 0;
-                have_offset = false;
-                continue;
-            }
+        if (handle_warmup_reset(seen_gen)) {
+            cursor_id = 0;
+            frame_offset.reset();
+            continue;
         }
 
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
             cursor_id = 0;
-            have_offset = false;
-            cursor_id = 0;
+            frame_offset.reset();
         }
 
         if (!output_enabled()) {
@@ -569,21 +563,17 @@ void realsense_consumer()
         }
 
         std::int64_t trigger_ns = 0;
-        bool assigned = false;
         {
             std::unique_lock<std::mutex> lock(time_mutex);
-            TimeRow* row = wait_for_row_locked(lock, cursor_id, seen_gen);
-            if (!row) {
-                continue;
-            }
-
+            TimeRow* row = nullptr;
             const std::uint64_t frame_sequence = frame.color_frame_number;
-            if (!have_offset) {
-                sequence_offset = static_cast<std::int64_t>(cursor_id) -
+            if (!frame_offset) {
+                row = wait_for_row_locked(lock, cursor_id, seen_gen);
+                if (!row) continue;
+                frame_offset = static_cast<std::int64_t>(cursor_id) -
                     static_cast<std::int64_t>(frame_sequence);
-                have_offset = true;
             }
-            const std::int64_t expected_id = static_cast<std::int64_t>(frame_sequence) + sequence_offset;
+            const std::int64_t expected_id = static_cast<std::int64_t>(frame_sequence) + *frame_offset;
             if (expected_id < 0) continue;
             while (cursor_id < static_cast<std::uint64_t>(expected_id)) {
                 row = wait_for_row_locked(lock, cursor_id, seen_gen);
@@ -628,12 +618,7 @@ void realsense_consumer()
             row->rs_done = true;
             trigger_ns = row->trigger_output_unix_ns;
             ++cursor_id;
-            assigned = true;
             time_cv.notify_all();
-        }
-
-        if (!assigned) {
-            continue;
         }
 
         if (!rs_prod->process_rgbd(frame)) {
@@ -661,7 +646,7 @@ void realsense_consumer()
     }
 
     if (!quitFlag.load()) {
-        stop_capture("RealSense consumer stopped");
+        request_stop("RealSense consumer stopped");
     }
 }
 
@@ -717,7 +702,7 @@ void trigger_consumer()
     }
 
     if (!quitFlag.load()) {
-        stop_capture("Trigger consumer stopped");
+        request_stop("Trigger consumer stopped");
     }
 }
 
@@ -742,7 +727,7 @@ void guide_temperature_consumer(int cam_id)
     }
 
     if (!quitFlag.load()) {
-        stop_capture("Guide temperature consumer stopped");
+        request_stop("Guide temperature consumer stopped");
     }
 }
 
@@ -922,6 +907,7 @@ int main(int argc, char **argv)
         }
         return EXIT_FAILURE;
     }
+    std::cout << "[start] RealSense ready" << std::endl;
 
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;
@@ -968,6 +954,7 @@ int main(int argc, char **argv)
         }
         return EXIT_FAILURE;
     }
+    std::cout << "[start] Guide left/right ready" << std::endl;
 
     for (int i = 0; i < 2; ++i) {
         producers.emplace_back([i]() { guides[i]->run(); });
@@ -979,7 +966,7 @@ int main(int argc, char **argv)
         rate.sleep();
     }
 
-    request_stop("ROS shutdown");
+    stop_capture_quietly();
     stop_components();
 
     for (auto& t : producers) t.join();

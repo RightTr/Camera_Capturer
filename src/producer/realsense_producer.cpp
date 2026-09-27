@@ -19,9 +19,6 @@ bool RealSenseProducer::configure_sync(rs2::depth_sensor& depth_sensor, int sync
 
     try {
         const rs2::option_range range = depth_sensor.get_option_range(RS2_OPTION_INTER_CAM_SYNC_MODE);
-        const float current_mode = depth_sensor.get_option(RS2_OPTION_INTER_CAM_SYNC_MODE);
-        std::cout << "[realsense] Inter-cam sync current mode: " << current_mode << std::endl;
-
         if (sync_mode == 0) {
             return true;
         }
@@ -35,8 +32,6 @@ bool RealSenseProducer::configure_sync(rs2::depth_sensor& depth_sensor, int sync
 
         depth_sensor.set_option(RS2_OPTION_INTER_CAM_SYNC_MODE, wanted);
         const float actual = depth_sensor.get_option(RS2_OPTION_INTER_CAM_SYNC_MODE);
-        std::cout << "[realsense] Inter-cam sync requested mode " << sync_mode
-                  << ", actual mode " << actual << std::endl;
         return std::fabs(actual - wanted) < 0.5f;
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Failed to configure inter-cam sync mode: " << e.what() << std::endl;
@@ -54,8 +49,6 @@ void configure_frames_queue_size(rs2::sensor& sensor, int queue_size, const char
         const rs2::option_range range = sensor.get_option_range(RS2_OPTION_FRAMES_QUEUE_SIZE);
         const float wanted = std::min(std::max(static_cast<float>(queue_size), range.min), range.max);
         sensor.set_option(RS2_OPTION_FRAMES_QUEUE_SIZE, wanted);
-        std::cout << "[realsense] " << name << " frames queue size set to "
-                  << sensor.get_option(RS2_OPTION_FRAMES_QUEUE_SIZE) << std::endl;
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Failed to set " << name
                   << " frames queue size: " << e.what() << std::endl;
@@ -94,7 +87,6 @@ void RealSenseProducer::save_intrinsics(const rs2::pipeline_profile& profile, co
         }
     }
 
-    std::cout << "[realsense] Intrinsic parameters saved to " << filename << std::endl;
 }
 
 void RealSenseProducer::save_depth_scale(double scale, const std::string& output_dir)
@@ -340,18 +332,7 @@ bool RealSenseProducer::process_rgbd(StampedRealSenseFrame& frame)
         cv::Size(color_video.get_width(), color_video.get_height()),
         CV_8UC3,
         const_cast<void*>(color_video.get_data()));
-    const auto count = processed_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (count % 300 == 0) {
-        const auto depth_processed = depth_processed_count_.load(std::memory_order_relaxed);
-        std::cout << "[realsense] processed=" << count
-                  << " depth_processed=" << depth_processed
-                  << " depth_skipped=" << depth_skipped_count_.load(std::memory_order_relaxed)
-                  << " avg_align_ms="
-                  << (depth_processed ? static_cast<double>(align_ns_.load()) / depth_processed / 1.0e6 : 0.0)
-                  << " avg_filter_ms="
-                  << (depth_processed ? static_cast<double>(filter_ns_.load()) / depth_processed / 1.0e6 : 0.0)
-                  << std::endl;
-    }
+    processed_count_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -499,9 +480,6 @@ void RealSenseProducer::run()
                 }
                 if (selected) {
                     motion_profiles.push_back(selected);
-                    std::cout << "[realsense] Selected "
-                              << (st == RS2_STREAM_ACCEL ? "accel" : "gyro")
-                              << " IMU profile @ " << selected.fps() << " Hz" << std::endl;
                 } else {
                     std::cerr << "[realsense] Requested "
                               << (st == RS2_STREAM_ACCEL ? "accel" : "gyro")
@@ -512,8 +490,6 @@ void RealSenseProducer::run()
 
             if (!motion_profiles.empty()) {
                 motion_sensor.open(motion_profiles);
-                std::cout << "[realsense] Starting IMU with " << motion_profiles.size()
-                          << " motion profile(s)" << std::endl;
                 motion_sensor.start([this](rs2::frame f) {
                     const rs2_stream st = f.get_profile().stream_type();
                     if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;
@@ -554,25 +530,16 @@ void RealSenseProducer::run()
         if (auto c = live_dev.first<rs2::color_sensor>()) {
             if (c.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
                 c.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
-                std::cout << "[realsense] RGB Global Time   = "
-                          << (c.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
-                          << std::endl;
             }
         }
         depth_sensor = live_dev.first<rs2::depth_sensor>();
         if (depth_sensor) {
             if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
                 depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
-                std::cout << "[realsense] Depth Global Time = "
-                          << (depth_sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
-                          << std::endl;
             }
         }
         if (motion_sensor && motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
             motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
-            std::cout << "[realsense] IMU Global Time   = "
-                      << (motion_sensor.get_option(RS2_OPTION_GLOBAL_TIME_ENABLED) > 0.5f ? "On" : "Off")
-                      << std::endl;
         }
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;

@@ -591,6 +591,7 @@ int main(int argc, char **argv) {
     if (!GuideProducer::start_capture_pair(guides)) {
         return EXIT_FAILURE;
     }
+    std::cout << "[start] Guide left/right ready" << std::endl;
 
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;

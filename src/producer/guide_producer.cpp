@@ -437,14 +437,7 @@ bool GuideProducer::materialize(GuideFrame& frame) const
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - started).count();
     materialize_ns_.fetch_add(static_cast<std::uint64_t>(elapsed), std::memory_order_relaxed);
-    const auto count = materialize_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (count % 300 == 0) {
-        std::cout << "[guide " << camera_name(cam_id_) << "] materialized=" << count
-                  << " avg_materialize_ms="
-                  << static_cast<double>(materialize_ns_.load(std::memory_order_relaxed)) /
-                         count / 1.0e6
-                  << std::endl;
-    }
+    materialize_count_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -612,7 +605,6 @@ int GuideProducer::open_serial_port() {
     }
 
     try {
-        std::cout << "Opening serial port for cam_id " << cam_id_ << " via " << serial_path << std::endl;
         serial_.Open(serial_path);
         serial_.SetBaudRate(LibSerial::BaudRate::BAUD_115200);
         serial_.SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
@@ -671,11 +663,9 @@ void GuideProducer::serial_worker() {
             switch (cmd) {
             case GuideProducer::SerialCmd::SYNC_ON:
                 serial_.Write(sync_on);
-                printf("Cam %d write SYNC_ON\n", cam_id_);
                 break;
             case GuideProducer::SerialCmd::SYNC_OFF:
                 serial_.Write(sync_off);
-                printf("Cam %d write SYNC_OFF\n", cam_id_);
                 break;
             case GuideProducer::SerialCmd::QUERY: {
                 serial_.Write(query_cmd);
