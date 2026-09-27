@@ -656,6 +656,7 @@ void trigger_consumer()
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
+            continue;
         }
 
         append_time_row(trigger_event);
