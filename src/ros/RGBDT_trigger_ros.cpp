@@ -8,6 +8,8 @@
 #include <deque>
 #include <fstream>
 #include <iostream>
+#include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -43,6 +45,7 @@ std::ofstream time_stream;
 
 struct TimeRow {
     std::uint64_t id = 0;
+    bool valid = true;
     std::int64_t trigger_output_unix_ns = 0;
     std::int64_t trigger_capture_unix_ns = 0;
     std::string trigger_output_time;
@@ -69,6 +72,8 @@ std::mutex time_mutex;
 std::condition_variable time_cv;
 std::deque<TimeRow> time_rows;
 std::uint64_t next_time_row_id = 0;
+double trigger_frequency = 30.0;
+std::int64_t trigger_tolerance_ns = 5000000;
 
 void request_stop(const char* reason)
 {
@@ -189,15 +194,26 @@ void reset_time_rows_locked()
     next_time_row_id = 0;
 }
 
-void append_time_row(const TriggerEvent& trigger_event)
+void append_time_row(const TriggerEvent& trigger_event, bool valid)
 {
     std::lock_guard<std::mutex> lock(time_mutex);
     TimeRow row{};
     row.id = next_time_row_id++;
+    row.valid = valid;
     row.trigger_output_unix_ns = trigger_event.trigger_output_unix_ns;
     row.trigger_capture_unix_ns = trigger_event.trigger_capture_unix_ns;
     row.trigger_output_time = format_timestamp_ns(trigger_event.trigger_output_unix_ns);
     row.trigger_capture_time = format_timestamp_ns(trigger_event.trigger_capture_unix_ns);
+    time_rows.push_back(std::move(row));
+    time_cv.notify_all();
+}
+
+void append_invalid_time_row()
+{
+    std::lock_guard<std::mutex> lock(time_mutex);
+    TimeRow row{};
+    row.id = next_time_row_id++;
+    row.valid = false;
     time_rows.push_back(std::move(row));
     time_cv.notify_all();
 }
@@ -220,7 +236,7 @@ TimeRow* row_for_cursor(std::uint64_t cursor_id)
 
 void write_time_row(const TimeRow& row)
 {
-    if (!if_save || !time_stream.is_open()) {
+    if (!row.valid || !if_save || !time_stream.is_open()) {
         return;
     }
     std::ostringstream ss;
@@ -387,10 +403,9 @@ void reset_capture_state()
 void guide_consumer(int cam_id)
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
-    bool skip_one = false;
     std::uint64_t cursor_id = 0;
-    bool have_sequence = false;
-    std::uint32_t last_sequence = 0;
+    bool have_offset = false;
+    std::int64_t sequence_offset = 0;
 
     while (!quitFlag.load()) {
         GuideFrame frame;
@@ -404,9 +419,7 @@ void guide_consumer(int cam_id)
                 reset_capture_state();
                 seen_gen = g_warmup_gen.load(std::memory_order_acquire);
                 cursor_id = 0;
-                have_sequence = false;
-                last_sequence = 0;
-                skip_one = false;
+                have_offset = false;
                 continue;
             }
         }
@@ -415,13 +428,8 @@ void guide_consumer(int cam_id)
         if (gen != seen_gen) {
             seen_gen = gen;
             cursor_id = 0;
-            have_sequence = false;
-            last_sequence = 0;
-            skip_one = true;
-        }
-        if (skip_one) {
-            skip_one = false;
-            continue;
+            have_offset = false;
+            cursor_id = 0;
         }
 
         if (!output_enabled()) {
@@ -438,17 +446,16 @@ void guide_consumer(int cam_id)
                 continue;
             }
 
-            const std::uint32_t step = have_sequence && frame.sequence > last_sequence
-                ? frame.sequence - last_sequence
-                : 1U;
-            const std::uint32_t missing = step > 0 ? step - 1U : 0U;
-            bool missing_failed = false;
-            for (std::uint32_t i = 0; i < missing; ++i) {
+            if (!have_offset) {
+                sequence_offset = static_cast<std::int64_t>(cursor_id) -
+                    static_cast<std::int64_t>(frame.sequence);
+                have_offset = true;
+            }
+            const std::int64_t expected_id = static_cast<std::int64_t>(frame.sequence) + sequence_offset;
+            if (expected_id < 0) continue;
+            while (cursor_id < static_cast<std::uint64_t>(expected_id)) {
                 row = wait_for_row_locked(lock, cursor_id, seen_gen);
-                if (!row) {
-                    missing_failed = true;
-                    break;
-                }
+                if (!row) break;
                 if (is_left) {
                     row->left_sensor_time.clear();
                     row->left_host_time.clear();
@@ -460,12 +467,17 @@ void guide_consumer(int cam_id)
                 }
                 ++cursor_id;
             }
-            if (missing_failed) {
+            if (cursor_id != static_cast<std::uint64_t>(expected_id)) continue;
+            row = wait_for_row_locked(lock, cursor_id, seen_gen);
+            if (!row) {
                 continue;
             }
 
-            row = wait_for_row_locked(lock, cursor_id, seen_gen);
-            if (!row) {
+            if (!row->valid) {
+                if (is_left) row->left_done = true;
+                else row->right_done = true;
+                ++cursor_id;
+                time_cv.notify_all();
                 continue;
             }
 
@@ -480,8 +492,6 @@ void guide_consumer(int cam_id)
             }
             trigger_ns = row->trigger_output_unix_ns;
             ++cursor_id;
-            have_sequence = true;
-            last_sequence = frame.sequence;
             assigned = true;
             time_cv.notify_all();
         }
@@ -525,8 +535,9 @@ void guide_consumer(int cam_id)
 void realsense_consumer()
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
-    bool skip_one = false;
     std::uint64_t cursor_id = 0;
+    bool have_offset = false;
+    std::int64_t sequence_offset = 0;
 
     for (;;) {
         StampedRealSenseFrame frame;
@@ -540,7 +551,7 @@ void realsense_consumer()
                 reset_capture_state();
                 seen_gen = g_warmup_gen.load(std::memory_order_acquire);
                 cursor_id = 0;
-                skip_one = false;
+                have_offset = false;
                 continue;
             }
         }
@@ -549,11 +560,8 @@ void realsense_consumer()
         if (gen != seen_gen) {
             seen_gen = gen;
             cursor_id = 0;
-            skip_one = true;
-        }
-        if (skip_one) {
-            skip_one = false;
-            continue;
+            have_offset = false;
+            cursor_id = 0;
         }
 
         if (!output_enabled()) {
@@ -569,15 +577,17 @@ void realsense_consumer()
                 continue;
             }
 
-            const std::uint32_t step = std::max<std::uint32_t>(1U, frame.trigger_step);
-            const std::uint32_t missing = step - 1U;
-            bool missing_failed = false;
-            for (std::uint32_t i = 0; i < missing; ++i) {
+            const std::uint64_t frame_sequence = frame.color_frame_number;
+            if (!have_offset) {
+                sequence_offset = static_cast<std::int64_t>(cursor_id) -
+                    static_cast<std::int64_t>(frame_sequence);
+                have_offset = true;
+            }
+            const std::int64_t expected_id = static_cast<std::int64_t>(frame_sequence) + sequence_offset;
+            if (expected_id < 0) continue;
+            while (cursor_id < static_cast<std::uint64_t>(expected_id)) {
                 row = wait_for_row_locked(lock, cursor_id, seen_gen);
-                if (!row) {
-                    missing_failed = true;
-                    break;
-                }
+                if (!row) break;
                 row->color_sensor_time.clear();
                 row->color_host_time.clear();
                 row->depth_sensor_time.clear();
@@ -585,12 +595,16 @@ void realsense_consumer()
                 row->rs_done = true;
                 ++cursor_id;
             }
-            if (missing_failed) {
+            if (cursor_id != static_cast<std::uint64_t>(expected_id)) continue;
+            row = wait_for_row_locked(lock, cursor_id, seen_gen);
+            if (!row) {
                 continue;
             }
 
-            row = wait_for_row_locked(lock, cursor_id, seen_gen);
-            if (!row) {
+            if (!row->valid) {
+                row->rs_done = true;
+                ++cursor_id;
+                time_cv.notify_all();
                 continue;
             }
 
@@ -654,6 +668,8 @@ void realsense_consumer()
 void trigger_consumer()
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    bool have_prev_trigger = false;
+    std::int64_t prev_trigger_ns = 0;
     while (!quitFlag.load()) {
         TriggerEvent trigger_event;
         if (!trigger_stamps || !trigger_stamps->take(trigger_event)) {
@@ -665,6 +681,7 @@ void trigger_consumer()
             if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
                 reset_capture_state();
                 seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+                have_prev_trigger = false;
                 continue;
             }
         }
@@ -672,10 +689,30 @@ void trigger_consumer()
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
+            have_prev_trigger = false;
             continue;
         }
 
-        append_time_row(trigger_event);
+        const std::int64_t period_ns = static_cast<std::int64_t>(1.0e9 / trigger_frequency);
+        bool valid = trigger_event.trigger_output_unix_ns > 0;
+        if (have_prev_trigger && valid) {
+            const std::int64_t dt = trigger_event.trigger_output_unix_ns - prev_trigger_ns;
+            const auto slots = static_cast<std::int64_t>(std::llround(
+                static_cast<double>(dt) / static_cast<double>(period_ns)));
+            const auto error = std::llabs(dt - slots * period_ns);
+            if (dt <= 0 || slots < 1 || error > trigger_tolerance_ns) {
+                valid = false;
+            } else {
+                for (std::int64_t i = 1; i < slots; ++i) {
+                    append_invalid_time_row();
+                }
+            }
+        }
+        append_time_row(trigger_event, valid);
+        if (trigger_event.trigger_output_unix_ns > 0) {
+            prev_trigger_ns = trigger_event.trigger_output_unix_ns;
+            have_prev_trigger = true;
+        }
         flush_time_rows();
     }
 
@@ -785,6 +822,12 @@ int main(int argc, char **argv)
     const int serial_baud = get_param<int>("serial_baud", 115200);
     const std::string trigger_line = get_param<std::string>("trigger_line", "PAA.00");
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
+    trigger_frequency = get_param<double>("trigger_frequency", 30.0);
+    trigger_tolerance_ns = get_param<std::int64_t>("trigger_tolerance_ns", 5000000);
+    if (trigger_frequency <= 0.0 || trigger_tolerance_ns < 0) {
+        std::cerr << "Invalid trigger timing parameters" << std::endl;
+        return EXIT_FAILURE;
+    }
     g_enable_guide_temperature = get_param<bool>("enable_guide_temperature", true);
     const bool depth_stream_enable = get_param<bool>("depth_stream_enable", true);
     g_depth_processing_enabled =

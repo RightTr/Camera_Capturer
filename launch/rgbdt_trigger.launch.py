@@ -21,6 +21,8 @@ def generate_launch_description():
     serial_baud = LaunchConfiguration("serial_baud")
     trigger_line = LaunchConfiguration("trigger_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
+    trigger_frequency = LaunchConfiguration("trigger_frequency")
+    trigger_tolerance_ns = LaunchConfiguration("trigger_tolerance_ns")
     enable_guide_temperature = LaunchConfiguration("enable_guide_temperature")
     depth_stream_enable = LaunchConfiguration("depth_stream_enable")
     depth_processing_enable = LaunchConfiguration("depth_processing_enable")
@@ -91,6 +93,16 @@ def generate_launch_description():
             description="Maximum unmatched GPIO/serial sync events kept for FIFO pairing.",
         ),
         DeclareLaunchArgument(
+            "trigger_frequency",
+            default_value="30.0",
+            description="Expected trigger frequency in Hz.",
+        ),
+        DeclareLaunchArgument(
+            "trigger_tolerance_ns",
+            default_value="5000000",
+            description="Allowed trigger period error in nanoseconds.",
+        ),
+        DeclareLaunchArgument(
             "enable_guide_temperature",
             default_value="false",
             description="Enable Guide temperature conversion and temperature topic publishing.",
@@ -128,6 +140,8 @@ def generate_launch_description():
                 "serial_baud": serial_baud,
                 "trigger_line": trigger_line,
                 "sync_queue_size": sync_queue_size,
+                "trigger_frequency": trigger_frequency,
+                "trigger_tolerance_ns": trigger_tolerance_ns,
                 "enable_guide_temperature": ParameterValue(enable_guide_temperature, value_type=bool),
                 "depth_stream_enable": ParameterValue(depth_stream_enable, value_type=bool),
                 "depth_processing_enable": ParameterValue(depth_processing_enable, value_type=bool),

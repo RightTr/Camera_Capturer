@@ -14,6 +14,8 @@ def generate_launch_description():
     serial_baud = LaunchConfiguration("serial_baud")
     trigger_line = LaunchConfiguration("trigger_line")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
+    trigger_frequency = LaunchConfiguration("trigger_frequency")
+    trigger_tolerance_ns = LaunchConfiguration("trigger_tolerance_ns")
     if_save = LaunchConfiguration("if_save")
     if_save_img = LaunchConfiguration("if_save_img")
     output_dir = LaunchConfiguration("output_dir")
@@ -53,6 +55,16 @@ def generate_launch_description():
             description="Maximum unmatched GPIO/serial sync events kept for FIFO pairing.",
         ),
         DeclareLaunchArgument(
+            "trigger_frequency",
+            default_value="30.0",
+            description="Expected trigger frequency in Hz.",
+        ),
+        DeclareLaunchArgument(
+            "trigger_tolerance_ns",
+            default_value="5000000",
+            description="Allowed trigger period error in nanoseconds.",
+        ),
+        DeclareLaunchArgument(
             "if_save",
             default_value="0",
             description="Save synchronized guide images and stereo timestamp CSV when nonzero.",
@@ -78,6 +90,8 @@ def generate_launch_description():
                 "serial_baud": serial_baud,
                 "trigger_line": trigger_line,
                 "sync_queue_size": sync_queue_size,
+                "trigger_frequency": trigger_frequency,
+                "trigger_tolerance_ns": trigger_tolerance_ns,
                 "if_save": if_save,
                 "if_save_img": if_save_img,
                 "output_dir": output_dir,
