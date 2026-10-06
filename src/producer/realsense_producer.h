@@ -21,6 +21,7 @@ struct StampedRealSenseFrame {
     std::uint64_t color_frame_number = 0;
     std::uint64_t depth_frame_number = 0;
     bool has_depth = false;
+    std::uint64_t depth_sensor_ns = 0;
     std::uint32_t trigger_step = 1;
     long color_host_sec = 0;
     long color_host_nanosec = 0;
@@ -60,6 +61,8 @@ public:
     void set_imu_enabled(bool imu);
     void set_imu_fps(int imu_fps);
     void set_imu_csv_enabled(bool enabled);
+    void set_imu_unified_enabled(bool enabled);
+    void set_imu_hardware_time_required(bool required);
     void set_align_enabled(bool align);
     void set_filter_enabled(bool filter);
     void set_depth_stream_enabled(bool enabled);
@@ -74,6 +77,7 @@ public:
     bool pop_accel(StampedImuFrame& frame);
     bool pop_gyro(StampedImuFrame& frame);
     bool pop_imu_csv(StampedImuFrame& frame);
+    bool pop_imu_unified(StampedImuFrame& frame);
     void clear_rgbd();
     void stop();
 
@@ -88,6 +92,8 @@ private:
     int camera_fps_ = 30;
     bool imu_ = true;
     bool imu_csv_ = false;
+    bool imu_unified_ = false;
+    bool imu_hardware_time_required_ = false;
     int imu_fps_ = 200;
     bool align_ = true;
     bool filter_ = true;
@@ -105,14 +111,17 @@ private:
     mutable std::mutex accel_mutex_;
     mutable std::mutex gyro_mutex_;
     mutable std::mutex imu_save_mutex_;
+    mutable std::mutex imu_unified_mutex_;
     std::condition_variable rgb_cv_;
     std::condition_variable accel_cv_;
     std::condition_variable gyro_cv_;
     std::condition_variable imu_save_cv_;
+    std::condition_variable imu_unified_cv_;
     std::queue<StampedRealSenseFrame> rgbd_queue_;
     std::queue<StampedImuFrame> accel_queue_;
     std::queue<StampedImuFrame> gyro_queue_;
     std::queue<StampedImuFrame> imu_save_queue_;
+    std::queue<StampedImuFrame> imu_unified_queue_;
     std::atomic<bool> stopped_{false};
     std::uint64_t last_color_frame_number_ = 0;
     std::uint64_t last_depth_frame_number_ = 0;

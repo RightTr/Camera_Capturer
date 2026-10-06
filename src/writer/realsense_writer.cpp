@@ -51,8 +51,8 @@ bool RealSenseWriter::open()
               << " (save_images=" << save_images_ << ")" << std::endl;
     time_stream_ << "color_frame_number,color_sensor_time,color_host_time,"
                     "depth_frame_number,depth_sensor_time,depth_host_time\n";
-    accel_stream_ << "host_time,sensor_time,ax,ay,az\n";
-    gyro_stream_ << "host_time,sensor_time,gx,gy,gz\n";
+    accel_stream_ << "host_time,sensor_time,ax,ay,az,trigger_time\n";
+    gyro_stream_ << "host_time,sensor_time,gx,gy,gz,trigger_time\n";
     return true;
 }
 
@@ -111,7 +111,8 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
     }
 }
 
-void RealSenseWriter::write_imu(const StampedImuFrame& frame)
+void RealSenseWriter::write_imu(const StampedImuFrame& frame,
+                               std::optional<std::int64_t> trigger_ns)
 {
     std::ostream* out = nullptr;
     if (frame.stream_type == RS2_STREAM_ACCEL) {
@@ -126,7 +127,11 @@ void RealSenseWriter::write_imu(const StampedImuFrame& frame)
     (*out) << format_timestamp_ns(frame.host_ns) << ","
            << format_timestamp_ns(frame.sensor_ns) << ","
            << std::fixed << std::setprecision(6)
-           << frame.x << "," << frame.y << "," << frame.z << "\n";
+           << frame.x << "," << frame.y << "," << frame.z << ",";
+    if (trigger_ns) {
+        (*out) << format_timestamp_ns(*trigger_ns);
+    }
+    (*out) << '\n';
 }
 
 void RealSenseWriter::write_intrinsics(const rs2::pipeline_profile& profile)

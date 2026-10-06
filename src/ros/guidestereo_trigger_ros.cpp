@@ -16,6 +16,7 @@
 
 #include "device_path.h"
 #include "producer/guide_producer.h"
+#include "utils/stereo_pair_buffer.h"
 #include "sync_bridge/sync_bridge.h"
 #include "utils/common_utils.h"
 #include "utils/ros_utils.h"
@@ -33,6 +34,7 @@ std::ofstream time_stream;
 
 struct TimeRow {
     std::uint64_t id = 0;
+    std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
     bool valid = true;
     std::int64_t trigger_output_unix_ns = 0;
     std::int64_t trigger_capture_unix_ns = 0;
@@ -52,11 +54,13 @@ struct TimeRow {
 };
 
 std::mutex time_mutex;
+std::mutex time_flush_mutex;
 std::condition_variable time_cv;
 std::deque<TimeRow> time_rows;
 std::uint64_t next_time_row_id = 0;
 double trigger_frequency = 30.0;
 std::int64_t trigger_tolerance_ns = 5000000;
+std::int64_t stereo_trigger_tolerance_ns = 5000000;
 
 std::unique_ptr<SyncBridge> sync_bridge;
 
@@ -145,6 +149,7 @@ std::unique_ptr<TriggerStampDistributor> trigger_stamps;
 
 ImagePublisher g_guide_image_pubs[2];
 ImagePublisher g_guide_temp_pubs[2];
+std::unique_ptr<StereoPairBuffer<GuideFrame>> g_stereo_pairs;
 std::chrono::steady_clock::time_point g_output_start_at;
 std::atomic<bool> g_warmup_done(false);
 std::atomic<std::uint64_t> g_warmup_gen(0);
@@ -216,6 +221,7 @@ void write_time_row(const TimeRow& row)
 
 void flush_time_rows(bool final = false)
 {
+    std::lock_guard<std::mutex> flush_lock(time_flush_mutex);
     std::vector<TimeRow> ready_rows;
     {
         std::lock_guard<std::mutex> lock(time_mutex);
@@ -245,12 +251,35 @@ void flush_time_rows(bool final = false)
     }
 }
 
+void finish_guide_row(TimeRow& row, bool left)
+{
+    auto& sensor_time = left ? row.left_sensor_time : row.right_sensor_time;
+    auto& host_time = left ? row.left_host_time : row.right_host_time;
+    auto& done = left ? row.left_done : row.right_done;
+    sensor_time.clear();
+    host_time.clear();
+    done = true;
+}
+
+void expire_stale_guide_rows()
+{
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(time_mutex);
+    for (auto& row : time_rows) {
+        if (now - row.created_at < std::chrono::seconds(1)) break;
+        if (!row.left_done) finish_guide_row(row, true);
+        if (!row.right_done) finish_guide_row(row, false);
+    }
+    time_cv.notify_all();
+}
+
 TimeRow* wait_for_row_locked(std::unique_lock<std::mutex>& lock, std::uint64_t cursor_id, std::uint64_t seen_gen)
 {
     while (!quitFlag.load()) {
         if (g_warmup_gen.load(std::memory_order_acquire) != seen_gen) {
             return nullptr;
         }
+        if (!time_rows.empty() && time_rows.front().id > cursor_id) return nullptr;
         if (TimeRow* row = row_for_cursor(cursor_id)) {
             return row;
         }
@@ -282,11 +311,13 @@ bool open_writers(const std::string& base_dir, bool save_images)
 void signal_handler(int)
 {
     quitFlag.store(true);
-    if (trigger_stamps) {
-        trigger_stamps->stop();
-    }
+    time_cv.notify_all();
+    if (g_stereo_pairs) g_stereo_pairs->stop();
     if (sync_bridge) {
         sync_bridge->stop();
+    }
+    if (trigger_stamps) {
+        trigger_stamps->stop();
     }
     for (int i = 0; i < 2; ++i) {
         if (guides[i]) {
@@ -298,11 +329,13 @@ void signal_handler(int)
 void stop_capture()
 {
     quitFlag.store(true);
-    if (trigger_stamps) {
-        trigger_stamps->stop();
-    }
+    time_cv.notify_all();
+    if (g_stereo_pairs) g_stereo_pairs->stop();
     if (sync_bridge) {
         sync_bridge->stop();
+    }
+    if (trigger_stamps) {
+        trigger_stamps->stop();
     }
     for (int i = 0; i < 2; ++i) {
         if (guides[i]) {
@@ -336,17 +369,16 @@ void reset_capture_state()
         std::lock_guard<std::mutex> lock(time_mutex);
         reset_time_rows_locked();
     }
+    const auto new_gen = g_warmup_gen.load(std::memory_order_relaxed) + 1;
+    if (g_stereo_pairs) g_stereo_pairs->reset(new_gen);
     g_warmup_done.store(true, std::memory_order_release);
-    g_warmup_gen.fetch_add(1, std::memory_order_acq_rel);
+    g_warmup_gen.store(new_gen, std::memory_order_release);
     time_cv.notify_all();
 }
 
 void guide_consumer(int cam_id)
 {
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
-    std::uint64_t cursor_id = 0;
-    bool have_offset = false;
-    std::int64_t sequence_offset = 0;
 
     while (!quitFlag.load()) {
         GuideFrame frame;
@@ -359,8 +391,6 @@ void guide_consumer(int cam_id)
             if (!g_warmup_done.load(std::memory_order_relaxed) && output_enabled()) {
                 reset_capture_state();
                 seen_gen = g_warmup_gen.load(std::memory_order_acquire);
-                cursor_id = 0;
-                have_offset = false;
                 continue;
             }
         }
@@ -368,105 +398,104 @@ void guide_consumer(int cam_id)
         const std::uint64_t gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;
-            cursor_id = 0;
-            have_offset = false;
-            cursor_id = 0;
         }
 
         if (!output_enabled()) {
             continue;
         }
 
-        std::int64_t trigger_ns = 0;
-        bool assigned = false;
-        {
-            std::unique_lock<std::mutex> lock(time_mutex);
-            TimeRow* row = wait_for_row_locked(lock, cursor_id, seen_gen);
-            if (!row) {
-                continue;
-            }
-
-            if (!have_offset) {
-                sequence_offset = static_cast<std::int64_t>(cursor_id) -
-                    static_cast<std::int64_t>(frame.sequence);
-                have_offset = true;
-            }
-            const std::int64_t expected_id = static_cast<std::int64_t>(frame.sequence) + sequence_offset;
-            if (expected_id < 0) continue;
-            while (cursor_id < static_cast<std::uint64_t>(expected_id)) {
-                row = wait_for_row_locked(lock, cursor_id, seen_gen);
-                if (!row) break;
-                if (cam_id == 0) {
-                    row->left_sensor_time.clear();
-                    row->left_host_time.clear();
-                    row->left_done = true;
-                } else {
-                    row->right_sensor_time.clear();
-                    row->right_host_time.clear();
-                    row->right_done = true;
-                }
-                ++cursor_id;
-            }
-            if (cursor_id != static_cast<std::uint64_t>(expected_id)) continue;
-            row = wait_for_row_locked(lock, cursor_id, seen_gen);
-            if (!row) {
-                continue;
-            }
-
-            if (!row->valid) {
-                if (cam_id == 0) row->left_done = true;
-                else row->right_done = true;
-                ++cursor_id;
-                time_cv.notify_all();
-                continue;
-            }
-
-            if (cam_id == 0) {
-                row->left_sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
-                row->left_host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-                row->left_done = true;
-            } else {
-                row->right_sensor_time = format_timestamp_sec_usec_as_nsec(frame.sensor_sec, frame.sensor_microsec);
-                row->right_host_time = format_timestamp_sec_nsec(frame.host_sec, frame.host_nanosec);
-                row->right_done = true;
-            }
-            trigger_ns = row->trigger_output_unix_ns;
-            ++cursor_id;
-            assigned = true;
-            time_cv.notify_all();
-        }
-
-        if (!assigned) {
-            continue;
-        }
-
         if (!guides[cam_id]->materialize(frame)) {
             continue;
         }
-
-        flush_time_rows();
-        frame.trigger_unix_ns = trigger_ns;
-        if (if_save) {
-            guide_writers[cam_id]->write(frame);
-        }
-
-        const auto stamp = make_time_ns(static_cast<uint64_t>(trigger_ns));
-        publish_image(
-            g_guide_image_pubs[cam_id],
-            frame.gray_image,
-            "mono8",
-            cam_id == 0 ? "guide_left" : "guide_right",
-            stamp);
-        publish_image(
-            g_guide_temp_pubs[cam_id],
-            frame.temperature_celsius,
-            "32FC1",
-            cam_id == 0 ? "guide_left" : "guide_right",
-            stamp);
+        const auto sequence = frame.sequence;
+        const auto match_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
+        g_stereo_pairs->submit(cam_id, gen, sequence, match_ns, std::move(frame));
     }
 
     if (!quitFlag.load()) {
         stop_capture();
+    }
+}
+
+void guide_pair_consumer()
+{
+    std::uint64_t cursor_id = 0;
+    std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
+    StereoPairBuffer<GuideFrame>::Pair pair;
+    for (;;) {
+        const auto result = g_stereo_pairs->take_for(pair, std::chrono::seconds(5));
+        if (result == StereoPairBuffer<GuideFrame>::TakeResult::stopped) break;
+        if (result == StereoPairBuffer<GuideFrame>::TakeResult::timeout) continue;
+        const auto gen = g_warmup_gen.load(std::memory_order_acquire);
+        if (gen != seen_gen) {
+            seen_gen = gen;
+            cursor_id = 0;
+        }
+        if (pair.generation != gen) continue;
+
+        std::int64_t trigger_ns = 0;
+        {
+            const auto left_host_ns = to_ns_from_sec_nsec(pair.left.host_sec, pair.left.host_nanosec);
+            const auto right_host_ns = to_ns_from_sec_nsec(pair.right.host_sec, pair.right.host_nanosec);
+            const auto pair_host_ns = left_host_ns + (right_host_ns - left_host_ns) / 2;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+            std::unique_lock<std::mutex> lock(time_mutex);
+            while (ok() && g_warmup_gen.load(std::memory_order_acquire) == gen) {
+                if (!time_rows.empty() && cursor_id < time_rows.front().id)
+                    cursor_id = time_rows.front().id;
+                bool passed_pair_time = false;
+                bool matched = false;
+                for (auto& row : time_rows) {
+                    if (row.id < cursor_id) continue;
+                    if (row.trigger_capture_unix_ns <= 0 ||
+                        row.trigger_capture_unix_ns < pair_host_ns - stereo_trigger_tolerance_ns) {
+                        finish_guide_row(row, true);
+                        finish_guide_row(row, false);
+                        cursor_id = row.id + 1;
+                        continue;
+                    }
+                    if (row.trigger_capture_unix_ns > pair_host_ns + stereo_trigger_tolerance_ns) {
+                        passed_pair_time = true;
+                        break;
+                    }
+                    if (row.valid) {
+                        row.left_sensor_time = format_timestamp_sec_usec_as_nsec(
+                            pair.left.sensor_sec, pair.left.sensor_microsec);
+                        row.left_host_time = format_timestamp_sec_nsec(
+                            pair.left.host_sec, pair.left.host_nanosec);
+                        row.right_sensor_time = format_timestamp_sec_usec_as_nsec(
+                            pair.right.sensor_sec, pair.right.sensor_microsec);
+                        row.right_host_time = format_timestamp_sec_nsec(
+                            pair.right.host_sec, pair.right.host_nanosec);
+                        trigger_ns = row.trigger_output_unix_ns;
+                    }
+                    row.left_done = true;
+                    row.right_done = true;
+                    cursor_id = row.id + 1;
+                    matched = true;
+                    break;
+                }
+                time_cv.notify_all();
+                if (matched || passed_pair_time ||
+                    time_cv.wait_until(lock, deadline) == std::cv_status::timeout)
+                    break;
+            }
+        }
+        flush_time_rows();
+        if (trigger_ns <= 0) continue;
+        pair.left.trigger_unix_ns = trigger_ns;
+        pair.right.trigger_unix_ns = trigger_ns;
+        const auto stamp = make_time_ns(static_cast<std::uint64_t>(trigger_ns));
+        publish_image(g_guide_image_pubs[0], pair.left.gray_image, "mono8", "guide_left", stamp);
+        publish_image(g_guide_image_pubs[1], pair.right.gray_image, "mono8", "guide_right", stamp);
+        publish_image(g_guide_temp_pubs[0], pair.left.temperature_celsius,
+                      "32FC1", "guide_left", stamp);
+        publish_image(g_guide_temp_pubs[1], pair.right.temperature_celsius,
+                      "32FC1", "guide_right", stamp);
+        if (if_save) {
+            guide_writers[0]->write(pair.left);
+            guide_writers[1]->write(pair.right);
+        }
     }
 }
 
@@ -517,6 +546,7 @@ void trigger_consumer()
             prev_trigger_ns = trigger_event.trigger_output_unix_ns;
             have_prev_trigger = true;
         }
+        expire_stale_guide_rows();
         flush_time_rows();
     }
 
@@ -540,19 +570,37 @@ int main(int argc, char **argv) {
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
     trigger_frequency = get_param<double>("trigger_frequency", 30.0);
     trigger_tolerance_ns = get_param<std::int64_t>("trigger_tolerance_ns", 5000000);
-    if (trigger_frequency <= 0.0 || trigger_tolerance_ns < 0) {
+    stereo_trigger_tolerance_ns =
+        get_param<std::int64_t>("stereo_trigger_tolerance_ns", 5000000);
+    const auto stereo_pair_tolerance_ns =
+        get_param<std::int64_t>("stereo_pair_tolerance_ns", 10000000);
+    const int stereo_pair_wait_ms = get_param<int>("stereo_pair_wait_ms", 120);
+    if (trigger_frequency <= 0.0 || trigger_tolerance_ns < 0 ||
+        stereo_pair_tolerance_ns <= 0 || stereo_trigger_tolerance_ns <= 0 ||
+        stereo_pair_wait_ms <= 0) {
         std::cerr << "Invalid trigger timing parameters" << std::endl;
         return EXIT_FAILURE;
     }
+    const auto half_period_ns = static_cast<std::int64_t>(0.5e9 / trigger_frequency);
+    if (stereo_pair_tolerance_ns >= half_period_ns ||
+        stereo_trigger_tolerance_ns >= half_period_ns) {
+        std::cerr << "Stereo sync tolerances must be less than half a trigger period" << std::endl;
+        return EXIT_FAILURE;
+    }
+    const auto stereo_queue_size = static_cast<std::size_t>(
+        std::ceil(trigger_frequency * stereo_pair_wait_ms / 1000.0)) + 2;
+    g_stereo_pairs = std::make_unique<StereoPairBuffer<GuideFrame>>(
+        std::chrono::nanoseconds(stereo_pair_tolerance_ns),
+        std::chrono::milliseconds(stereo_pair_wait_ms), stereo_queue_size);
     if_save = get_param<int>("if_save", 0);
     const int if_save_img = get_param<int>("if_save_img", 1);
     const std::string outputdir = get_param<std::string>("output_dir", "./capture");
     const int warmup = get_param<int>("warmup", 10);
 
-    const auto left_image_pub = advertise<ImageMsg>("guide_left/image", 30);
-    const auto right_image_pub = advertise<ImageMsg>("guide_right/image", 30);
-    const auto left_temp_pub = advertise<ImageMsg>("guide_left/temperature", 30);
-    const auto right_temp_pub = advertise<ImageMsg>("guide_right/temperature", 30);
+    g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 4);
+    g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 4);
+    g_guide_temp_pubs[0] = advertise<ImageMsg>("guide_left/temperature", 30);
+    g_guide_temp_pubs[1] = advertise<ImageMsg>("guide_right/temperature", 30);
 
     auto sync_sub = subscribe<Int32Msg>(
         "guidecam/sync", 1,
@@ -613,6 +661,7 @@ int main(int argc, char **argv) {
     consumers.emplace_back(trigger_consumer);
     consumers.emplace_back(guide_consumer, 0);
     consumers.emplace_back(guide_consumer, 1);
+    consumers.emplace_back(guide_pair_consumer);
 
     std::vector<std::thread> producers;
     for (int i = 0; i < 2; ++i) {
@@ -620,20 +669,12 @@ int main(int argc, char **argv) {
     }
 
     Rate rate(10.0);
-    while (ok()) {
+    while (ok() && !quitFlag.load()) {
         spin_once();
         rate.sleep();
     }
 
-    for (auto& g : guides) {
-        if (g) g->stop();
-    }
-    if (trigger_stamps) {
-        trigger_stamps->stop();
-    }
-    if (sync_bridge) {
-        sync_bridge->stop();
-    }
+    stop_capture();
 
     for (auto& t : producers) {
         t.join();

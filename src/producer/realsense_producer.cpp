@@ -154,6 +154,16 @@ void RealSenseProducer::set_imu_csv_enabled(bool enabled)
     imu_csv_ = enabled;
 }
 
+void RealSenseProducer::set_imu_unified_enabled(bool enabled)
+{
+    imu_unified_ = enabled;
+}
+
+void RealSenseProducer::set_imu_hardware_time_required(bool required)
+{
+    imu_hardware_time_required_ = required;
+}
+
 void RealSenseProducer::set_align_enabled(bool align)
 {
     align_ = align;
@@ -207,6 +217,7 @@ void RealSenseProducer::stop()
     accel_cv_.notify_all();
     gyro_cv_.notify_all();
     imu_save_cv_.notify_all();
+    imu_unified_cv_.notify_all();
 }
 
 bool RealSenseProducer::push_rgbd(StampedRealSenseFrame&& frame)
@@ -239,6 +250,10 @@ bool RealSenseProducer::push_imu(StampedImuFrame&& frame)
         cv.notify_one();
         return true;
     };
+
+    if (imu_unified_) {
+        return push_queue(imu_unified_mutex_, imu_unified_cv_, imu_unified_queue_, std::move(frame));
+    }
 
     if (frame.stream_type == RS2_STREAM_ACCEL) {
         if (!push_queue(accel_mutex_, accel_cv_, accel_queue_, StampedImuFrame(frame))) {
@@ -392,6 +407,22 @@ bool RealSenseProducer::pop_imu_csv(StampedImuFrame& frame)
     return true;
 }
 
+bool RealSenseProducer::pop_imu_unified(StampedImuFrame& frame)
+{
+    std::unique_lock<std::mutex> lock(imu_unified_mutex_);
+    imu_unified_cv_.wait(lock, [&] {
+        return !imu_unified_queue_.empty() || !live();
+    });
+    if (imu_unified_queue_.empty()) {
+        return false;
+    }
+    frame = std::move(imu_unified_queue_.front());
+    imu_unified_queue_.pop();
+    lock.unlock();
+    imu_unified_cv_.notify_one();
+    return true;
+}
+
 void RealSenseProducer::run()
 {
     rs2::context ctx;
@@ -439,6 +470,9 @@ void RealSenseProducer::run()
         stop();
         return;
     }
+    if (imu_hardware_time_required_ && depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+        depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 0.0f);
+    }
     if (!depth_stream_enabled_ && sync_mode_ != 0) {
         std::cerr << "[realsense] depth stream is disabled; depth-based hardware sync "
                      "will not participate in capture" << std::endl;
@@ -464,7 +498,8 @@ void RealSenseProducer::run()
         }
         if (motion_sensor) {
             if (motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-                motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+                motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED,
+                                         imu_hardware_time_required_ ? 0.0f : 1.0f);
             }
 
             std::vector<rs2::stream_profile> motion_profiles;
@@ -494,8 +529,23 @@ void RealSenseProducer::run()
                     const rs2_stream st = f.get_profile().stream_type();
                     if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;
 
+                    if (imu_hardware_time_required_ &&
+                        f.get_frame_timestamp_domain() != RS2_TIMESTAMP_DOMAIN_HARDWARE_CLOCK) {
+                        std::cerr << "[realsense] IMU timestamp is not in hardware clock domain" << std::endl;
+                        if (fail_) fail_();
+                        stop();
+                        return;
+                    }
+
                     const uint64_t host_ns = host_time_ns_now();
                     const double ts_ms = f.get_timestamp();
+                    if (imu_hardware_time_required_ &&
+                        (!std::isfinite(ts_ms) || ts_ms < 0.0)) {
+                        std::cerr << "[realsense] Invalid IMU hardware timestamp" << std::endl;
+                        if (fail_) fail_();
+                        stop();
+                        return;
+                    }
                     const uint64_t sensor_ns = (std::isfinite(ts_ms) && ts_ms >= 0.0)
                         ? static_cast<uint64_t>(ts_ms * 1e6)
                         : host_ns;
@@ -539,7 +589,8 @@ void RealSenseProducer::run()
             }
         }
         if (motion_sensor && motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
-            motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+            motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED,
+                                     imu_hardware_time_required_ ? 0.0f : 1.0f);
         }
     } catch (const rs2::error& e) {
         std::cerr << "[realsense] Error starting pipeline: " << e.what() << std::endl;
@@ -570,6 +621,13 @@ void RealSenseProducer::run()
         rs2::frame depth_f;
         if (depth_stream_enabled_) {
             depth_f = frameset.get_depth_frame();
+        }
+        if (imu_hardware_time_required_ && depth_f &&
+            depth_f.get_frame_timestamp_domain() != RS2_TIMESTAMP_DOMAIN_HARDWARE_CLOCK) {
+            std::cerr << "[realsense] Depth timestamp is not in hardware clock domain" << std::endl;
+            if (fail_) fail_();
+            stop();
+            break;
         }
         const auto depth_host_now = std::chrono::system_clock::now();
         const auto depth_host_s = std::chrono::duration_cast<std::chrono::seconds>(depth_host_now.time_since_epoch());
@@ -653,6 +711,7 @@ void RealSenseProducer::run()
         frame.color_frame_number = color_frame_number;
         frame.depth_frame_number = depth_frame_number;
         frame.has_depth = static_cast<bool>(depth_f);
+        frame.depth_sensor_ns = depth_sensor_ns;
         frame.trigger_step = trigger_step;
         frame.color_host_sec = color_host_s.count();
         frame.color_host_nanosec = color_host_ns;

@@ -16,6 +16,9 @@ def generate_launch_description():
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     trigger_frequency = LaunchConfiguration("trigger_frequency")
     trigger_tolerance_ns = LaunchConfiguration("trigger_tolerance_ns")
+    stereo_pair_tolerance_ns = LaunchConfiguration("stereo_pair_tolerance_ns")
+    stereo_trigger_tolerance_ns = LaunchConfiguration("stereo_trigger_tolerance_ns")
+    stereo_pair_wait_ms = LaunchConfiguration("stereo_pair_wait_ms")
     if_save = LaunchConfiguration("if_save")
     if_save_img = LaunchConfiguration("if_save_img")
     output_dir = LaunchConfiguration("output_dir")
@@ -65,6 +68,21 @@ def generate_launch_description():
             description="Allowed trigger period error in nanoseconds.",
         ),
         DeclareLaunchArgument(
+            "stereo_pair_tolerance_ns",
+            default_value="10000000",
+            description="Maximum left/right V4L2 sensor timestamp difference in nanoseconds.",
+        ),
+        DeclareLaunchArgument(
+            "stereo_trigger_tolerance_ns",
+            default_value="5000000",
+            description="Maximum paired Guide host timestamp to trigger capture difference in nanoseconds.",
+        ),
+        DeclareLaunchArgument(
+            "stereo_pair_wait_ms",
+            default_value="120",
+            description="Maximum time to retain an unmatched Guide image.",
+        ),
+        DeclareLaunchArgument(
             "if_save",
             default_value="0",
             description="Save synchronized guide images and stereo timestamp CSV when nonzero.",
@@ -92,6 +110,9 @@ def generate_launch_description():
                 "sync_queue_size": sync_queue_size,
                 "trigger_frequency": trigger_frequency,
                 "trigger_tolerance_ns": trigger_tolerance_ns,
+                "stereo_pair_tolerance_ns": stereo_pair_tolerance_ns,
+                "stereo_trigger_tolerance_ns": stereo_trigger_tolerance_ns,
+                "stereo_pair_wait_ms": stereo_pair_wait_ms,
                 "if_save": if_save,
                 "if_save_img": if_save_img,
                 "output_dir": output_dir,
