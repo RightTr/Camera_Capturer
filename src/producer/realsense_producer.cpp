@@ -2,11 +2,13 @@
 
 #include <chrono>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <thread>
 #include <utility>
 
@@ -62,13 +64,13 @@ uint64_t RealSenseProducer::host_time_ns_now()
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-void RealSenseProducer::save_intrinsics(const rs2::pipeline_profile& profile, const std::string& output_dir)
+bool RealSenseProducer::save_intrinsics(const rs2::pipeline_profile& profile, const std::string& output_dir)
 {
     const std::string filename = output_dir + "/realsense/realsense_intrinsics.txt";
     std::ofstream outfile(filename);
     if (!outfile.is_open()) {
         std::cerr << "[realsense] Failed to open file to save intrinsics: " << filename << std::endl;
-        return;
+        return false;
     }
 
     for (const auto& stream_profile : profile.get_streams()) {
@@ -86,18 +88,21 @@ void RealSenseProducer::save_intrinsics(const rs2::pipeline_profile& profile, co
                     << intrinsics.coeffs[4] << "]\n\n";
         }
     }
-
+    outfile.flush();
+    return outfile.good();
 }
 
-void RealSenseProducer::save_depth_scale(double scale, const std::string& output_dir)
+bool RealSenseProducer::save_depth_scale(double scale, const std::string& output_dir)
 {
     const std::string filename = output_dir + "/realsense/depth_scale.txt";
     std::ofstream outfile(filename);
     if (!outfile.is_open()) {
         std::cerr << "[realsense] Failed to open file to save depth scale: " << filename << std::endl;
-        return;
+        return false;
     }
     outfile << std::fixed << std::setprecision(10) << scale;
+    outfile.flush();
+    return outfile.good();
 }
 
 RealSenseProducer::RealSenseProducer(
@@ -496,6 +501,12 @@ void RealSenseProducer::run()
                 break;
             }
         }
+        if (imu_hardware_time_required_ && !motion_sensor) {
+            std::cerr << "[realsense] A hardware-clock motion sensor is required" << std::endl;
+            if (fail_) fail_();
+            stop();
+            return;
+        }
         if (motion_sensor) {
             if (motion_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
                 motion_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED,
@@ -503,8 +514,10 @@ void RealSenseProducer::run()
             }
 
             std::vector<rs2::stream_profile> motion_profiles;
+            std::array<std::uint32_t, 2> selected_fps{};
             for (rs2_stream st : {RS2_STREAM_ACCEL, RS2_STREAM_GYRO}) {
                 rs2::stream_profile selected;
+                int best_distance = std::numeric_limits<int>::max();
                 for (auto& p : motion_sensor.get_stream_profiles()) {
                     auto mp = p.as<rs2::motion_stream_profile>();
                     if (!mp || mp.stream_type() != st) continue;
@@ -512,9 +525,16 @@ void RealSenseProducer::run()
                         selected = p;
                         break;
                     }
+                    if (imu_hardware_time_required_ && st == RS2_STREAM_ACCEL &&
+                        std::abs(mp.fps() - imu_fps_) < best_distance) {
+                        best_distance = std::abs(mp.fps() - imu_fps_);
+                        selected = p;
+                    }
                 }
                 if (selected) {
                     motion_profiles.push_back(selected);
+                    const int index = st == RS2_STREAM_ACCEL ? 0 : 1;
+                    selected_fps[index] = static_cast<std::uint32_t>(selected.fps());
                 } else {
                     std::cerr << "[realsense] Requested "
                               << (st == RS2_STREAM_ACCEL ? "accel" : "gyro")
@@ -523,9 +543,16 @@ void RealSenseProducer::run()
                 }
             }
 
+            if (imu_hardware_time_required_ && motion_profiles.size() != 2) {
+                std::cerr << "[realsense] Both hardware-clock accel and gyro profiles are required" << std::endl;
+                if (fail_) fail_();
+                stop();
+                return;
+            }
             if (!motion_profiles.empty()) {
+                try {
                 motion_sensor.open(motion_profiles);
-                motion_sensor.start([this](rs2::frame f) {
+                motion_sensor.start([this, selected_fps](rs2::frame f) {
                     const rs2_stream st = f.get_profile().stream_type();
                     if (st != RS2_STREAM_ACCEL && st != RS2_STREAM_GYRO) return;
 
@@ -550,9 +577,17 @@ void RealSenseProducer::run()
                         ? static_cast<uint64_t>(ts_ms * 1e6)
                         : host_ns;
                     const rs2_vector d = f.as<rs2::motion_frame>().get_motion_data();
-                    push_imu(StampedImuFrame{st, host_ns, sensor_ns, d.x, d.y, d.z});
+                    const int index = st == RS2_STREAM_ACCEL ? 0 : 1;
+                    push_imu(StampedImuFrame{st, host_ns, sensor_ns, d.x, d.y, d.z,
+                                             f.get_frame_number(), selected_fps[index]});
                 });
                 imu_started = true;
+                } catch (const rs2::error& e) {
+                    std::cerr << "[realsense] Failed to start IMU profiles: " << e.what() << std::endl;
+                    if (fail_) fail_();
+                    stop();
+                    return;
+                }
             }
         }
     }

@@ -53,7 +53,10 @@ bool RealSenseWriter::open()
                     "depth_frame_number,depth_sensor_time,depth_host_time\n";
     accel_stream_ << "host_time,sensor_time,ax,ay,az,trigger_time\n";
     gyro_stream_ << "host_time,sensor_time,gx,gy,gz,trigger_time\n";
-    return true;
+    time_stream_.flush();
+    accel_stream_.flush();
+    gyro_stream_.flush();
+    return time_stream_.good() && accel_stream_.good() && gyro_stream_.good();
 }
 
 void RealSenseWriter::close()
@@ -63,10 +66,10 @@ void RealSenseWriter::close()
     if (gyro_stream_.is_open()) gyro_stream_.close();
 }
 
-void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
+bool RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
 {
     if (!time_stream_.is_open()) {
-        return;
+        return false;
     }
 
     const auto color_sensor_ns = to_ns_from_sec_usec(
@@ -100,18 +103,20 @@ void RealSenseWriter::write_rgbd(const StampedRealSenseFrame& frame)
     if (save_images_) {
         std::ostringstream ss;
         ss << output_dir_ << "/realsense/rgb/" << color_stamp_time << ".png";
-        cv::imwrite(ss.str(), frame.color_image);
+        if (!cv::imwrite(ss.str(), frame.color_image)) return false;
 
         if (!frame.depth_image_raw.empty()) {
             ss.str("");
             ss.clear();
             ss << output_dir_ << "/realsense/depth_raw/" << depth_stamp_time << ".png";
-            cv::imwrite(ss.str(), frame.depth_image_raw);
+            if (!cv::imwrite(ss.str(), frame.depth_image_raw)) return false;
         }
     }
+    time_stream_.flush();
+    return time_stream_.good();
 }
 
-void RealSenseWriter::write_imu(const StampedImuFrame& frame,
+bool RealSenseWriter::write_imu(const StampedImuFrame& frame,
                                std::optional<std::int64_t> trigger_ns)
 {
     std::ostream* out = nullptr;
@@ -121,7 +126,7 @@ void RealSenseWriter::write_imu(const StampedImuFrame& frame,
         out = &gyro_stream_;
     }
     if (!out || !out->good()) {
-        return;
+        return false;
     }
 
     (*out) << format_timestamp_ns(frame.host_ns) << ","
@@ -132,14 +137,16 @@ void RealSenseWriter::write_imu(const StampedImuFrame& frame,
         (*out) << format_timestamp_ns(*trigger_ns);
     }
     (*out) << '\n';
+    out->flush();
+    return out->good();
 }
 
-void RealSenseWriter::write_intrinsics(const rs2::pipeline_profile& profile)
+bool RealSenseWriter::write_intrinsics(const rs2::pipeline_profile& profile)
 {
-    RealSenseProducer::save_intrinsics(profile, output_dir_);
+    return RealSenseProducer::save_intrinsics(profile, output_dir_);
 }
 
-void RealSenseWriter::write_depth_scale(double scale)
+bool RealSenseWriter::write_depth_scale(double scale)
 {
-    RealSenseProducer::save_depth_scale(scale, output_dir_);
+    return RealSenseProducer::save_depth_scale(scale, output_dir_);
 }

@@ -23,7 +23,6 @@ namespace {
 constexpr int kWidth = 640;
 constexpr int kHeight = 512;
 constexpr int kParamOffset = 512 * 1280 * 2;
-constexpr int kGuideFps = 30;
 constexpr std::size_t kQueryPayloadSize = 22;
 constexpr std::size_t kFocalTempHighIndex = 9;
 constexpr std::size_t kFocalTempLowIndex = 10;
@@ -485,9 +484,7 @@ void GuideProducer::clear()
 void GuideProducer::run()
 {
     const std::string name = camera_name(cam_id_);
-    const auto min_dt = std::chrono::microseconds(900000 / kGuideFps);
     struct pollfd pfd{fd_, POLLIN, 0};
-    auto last = std::chrono::system_clock::now();
 
     while (live()) {
         const int ret = poll(&pfd, 1, 33);
@@ -519,26 +516,21 @@ void GuideProducer::run()
         }
 
         const auto now = std::chrono::system_clock::now();
-        if (now - last > min_dt) {
-            GuideFrame frame{};
-            frame.cam_id = cam_id_;
-            frame.sequence = buf.sequence;
-            frame.sensor_sec = buf.timestamp.tv_sec;
-            frame.sensor_microsec = buf.timestamp.tv_usec;
+        GuideFrame frame{};
+        frame.cam_id = cam_id_;
+        frame.sequence = buf.sequence;
+        frame.sensor_sec = buf.timestamp.tv_sec;
+        frame.sensor_microsec = buf.timestamp.tv_usec;
 
-            frame.buffer = GuideBufferLease(capture_state_, buf.index);
+        frame.buffer = GuideBufferLease(capture_state_, buf.index);
 
-            const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-            frame.host_sec = sec.count();
-            frame.host_nanosec =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
+        const auto sec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+        frame.host_sec = sec.count();
+        frame.host_nanosec =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch() - sec).count();
 
-            if (!push(std::move(frame))) {
-                break;
-            }
-            last = now;
-        } else {
-            capture_state_->release(buf.index);
+        if (!push(std::move(frame))) {
+            break;
         }
     }
 

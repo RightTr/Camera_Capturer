@@ -40,6 +40,8 @@ struct StampedImuFrame {
     uint64_t host_ns;
     uint64_t sensor_ns;
     float x, y, z;
+    std::uint64_t frame_number = 0;
+    std::uint32_t fps = 0;
 };
 
 class RealSenseProducer {
@@ -53,8 +55,8 @@ public:
     ~RealSenseProducer();
 
     static uint64_t host_time_ns_now();
-    static void save_intrinsics(const rs2::pipeline_profile& profile, const std::string& output_dir);
-    static void save_depth_scale(double scale, const std::string& output_dir);
+    static bool save_intrinsics(const rs2::pipeline_profile& profile, const std::string& output_dir);
+    static bool save_depth_scale(double scale, const std::string& output_dir);
 
     void set_sync_mode(int sync_mode);
     void set_camera_fps(int camera_fps);

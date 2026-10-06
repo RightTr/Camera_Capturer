@@ -13,11 +13,11 @@ public:
 
     bool open();
     void close();
-    void write_rgbd(const StampedRealSenseFrame& frame);
-    void write_imu(const StampedImuFrame& frame,
+    bool write_rgbd(const StampedRealSenseFrame& frame);
+    bool write_imu(const StampedImuFrame& frame,
                    std::optional<std::int64_t> trigger_ns = std::nullopt);
-    void write_intrinsics(const rs2::pipeline_profile& profile);
-    void write_depth_scale(double scale);
+    bool write_intrinsics(const rs2::pipeline_profile& profile);
+    bool write_depth_scale(double scale);
 
 private:
     std::string output_dir_;

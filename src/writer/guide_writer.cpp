@@ -52,7 +52,8 @@ bool GuideWriter::open()
               << std::filesystem::absolute(camera_dir).string()
               << " (save_images=" << save_images_ << ")" << std::endl;
     time_stream_ << "sensor_time,host_time\n";
-    return true;
+    time_stream_.flush();
+    return time_stream_.good();
 }
 
 void GuideWriter::close()
@@ -62,10 +63,10 @@ void GuideWriter::close()
     if (focal_temp_stream_.is_open()) focal_temp_stream_.close();
 }
 
-void GuideWriter::write(const GuideFrame& frame)
+bool GuideWriter::write(const GuideFrame& frame)
 {
     if (!time_stream_.is_open() || !param_stream_.is_open()) {
-        return;
+        return false;
     }
 
     const auto sensor_ns = to_ns_from_sec_usec(frame.sensor_sec, frame.sensor_microsec);
@@ -98,16 +99,28 @@ void GuideWriter::write(const GuideFrame& frame)
         std::ostringstream ss;
         ss << output_dir_ << "/" << camera_name_ << "/image/"
            << format_timestamp_ns(stamp_ns) << ".png";
-        cv::imwrite(ss.str(), frame.gray_image);
+        if (!cv::imwrite(ss.str(), frame.gray_image)) return false;
 
         if (!frame.temperature_celsius.empty()) {
             ss.str("");
             ss.clear();
             ss << output_dir_ << "/" << camera_name_ << "/temperature/"
                << format_timestamp_ns(stamp_ns) << ".png";
-            save_temperature_png(frame.temperature_celsius, ss.str());
+            if (!save_temperature_png(frame.temperature_celsius, ss.str())) return false;
         }
     }
+    time_stream_.flush();
+    param_stream_.flush();
+    return time_stream_.good() && param_stream_.good();
+}
+
+bool GuideWriter::write_camera_temperature(const GuideTemperature& temperature)
+{
+    if (!focal_temp_stream_.is_open()) return false;
+    focal_temp_stream_ << format_timestamp_ns(temperature.host_unix_ns)
+                       << ' ' << temperature.temperature << '\n';
+    focal_temp_stream_.flush();
+    return focal_temp_stream_.good();
 }
 
 std::ofstream* GuideWriter::temp_stream()
@@ -115,11 +128,13 @@ std::ofstream* GuideWriter::temp_stream()
     return focal_temp_stream_.is_open() ? &focal_temp_stream_ : nullptr;
 }
 
-void GuideWriter::save_temperature_png(const cv::Mat& mat, const std::string& filename)
+bool GuideWriter::save_temperature_png(const cv::Mat& mat, const std::string& filename)
 {
     cv::Mat scaled;
     mat.convertTo(scaled, CV_16U, 100);
     if (!cv::imwrite(filename, scaled)) {
         std::cerr << "Failed to save temperature image: " << filename << std::endl;
+        return false;
     }
+    return true;
 }

@@ -213,17 +213,15 @@ ros2 launch camera_capturer rgbdt_trigger.launch.py
 
 Use this launch file (*rgbdt_trigger.launch.py*) when Guide stereo and RealSense RGBD are driven by the external PWM trigger board. The board timestamp serial port provides the PWM output time, and the GPIO line captures the PWM generation time on MCU.
 
-Both trigger launch files first pair Guide left/right images by their V4L2 sensor timestamps. A pair is accepted only when the timestamps differ by at most `stereo_pair_tolerance_ns` (10 ms by default); an older unmatched image is dropped. The pair is then matched to the board trigger using the midpoint of its two V4L2 host timestamps and `trigger_capture_time`, within `stereo_trigger_tolerance_ns` (5 ms by default). Only a pair that passes both checks is published, with the same trigger timestamp on both image topics. `stereo_pair_wait_ms` defaults to 120. The left/right image publisher queues hold four messages each. Both tolerances must be less than half a trigger period, so an adjacent trigger cannot be accepted as the same exposure.
+The two trigger nodes use different synchronization paths. `guidestereo_trigger_node` retains its existing timestamp matcher. `rgbdt_trigger_node` uses the board trigger as the camera slot clock: a thermal stereo pair, RGB, and depth assigned to slot `k` all receive its board output timestamp `T_k`.
 
-In RGBDT trigger mode, each trigger row has an internal `trigger_id`. RealSense frames are associated with the latest preceding trigger capture using the frame host timestamp; frame numbers are not used to infer the trigger row. `realsense_trigger_max_latency_ns` defaults to 25 ms at 30 Hz and must remain below one trigger period. Frames with no recent trigger match are dropped. The top-level `times.csv` includes `trigger_id` for checking Guide and RealSense associations; the ID is not added to ROS messages.
+In `rgbdt_trigger_node`, Guide left/right frames are paired by V4L2 sensor timestamps. GPIO capture and host arrival times calibrate the initial slot only; `calibration_max_latency_ns` must be a measured upper bound smaller than one trigger period. The first complete slot is retained as a depth/trigger anchor and is not published. From the next slot onward, any trigger, camera sequence, processing, IMU, queue, or recording gap stops the VIO output and exits with an error. The Guide producer passes every dequeued frame without software frame-rate throttling.
 
-`rgbdt_trigger.launch.py` provides these IMU and ROS timestamp options:
+A single coordinator publishes the four camera images and combined gyro-rate `realsense/imu/data`. It waits for the next depth anchor, maps every gyro sample with two adjacent anchors, interpolates acceleration at each gyro hardware time, and publishes the first IMU sample strictly after an image timestamp before publishing that image. Camera images therefore share one trigger stamp and never precede their covering IMU. Startup and output have at least one additional trigger period of latency. The RealSense motion sensor must provide reliable per-stream frame numbers; accel and gyro are checked independently for continuous frame numbers and hardware time. Gyro uses `imu_fps`; accel uses the closest supported hardware rate. Both streams are required.
 
-- `publish_combined_imu:=true` publishes `realsense/imu/data` at each gyro sample, with acceleration linearly interpolated between surrounding accel samples. The existing `realsense/imu/accel` and `realsense/imu/gyro` topics remain available.
-- `sync_imu_to_trigger:=true` maps each IMU hardware timestamp to the trigger board's Unix time using adjacent matched depth-frame/trigger pairs. It applies the mapped stamp to all published IMU topics and requires `depth_stream_enable:=true`. Samples without a valid pair are not published with a guessed timestamp.
-- `ros_stamp_host_clock:=true` stamps camera images with the trigger GPIO capture time instead of the board output time. When IMU trigger mapping is enabled, IMU stamps are interpolated onto that same capture-time axis. Recorded hardware timestamps remain unchanged.
+When saving is enabled, a separate writer thread handles PNG and CSV output. A full writer queue or write failure stops the capture. `rgbdt_trigger.launch.py` always enables and publishes depth; this mode no longer offers `depth_stream_enable` or `depth_processing_enable` overrides. Independent accel and gyro ROS topics are not published by this trigger node; accepted raw samples remain available in its CSV files.
 
-The first 10 seconds after startup are treated as a warm-up period. Frames are captured, but ROS image publishing and file saving start only after the warm-up period ends.
+The first 10 seconds after startup are a warm-up period. A continuous startup segment must be established within 10 seconds after warm-up; otherwise the node exits with an error.
 
 * RealSense launch
 
@@ -274,13 +272,13 @@ output_dir/
         └── gyro.csv
 ```
 
-`times.csv` in the top-level `output_dir` is produced by `rgbdt_trigger_node`. It records one aligned row per trigger cycle:
+`times.csv` in the top-level `output_dir` is diagnostic only. Each accepted camera image writes one event row:
 
 ```text
-pwm_output_time,pwm_capture_time,left_host_time,right_host_time,color_sensor_time,color_host_time,depth_sensor_time,depth_host_time
+trigger_id,trigger_time,source,sensor_time
 ```
 
-If one camera drops a frame, the corresponding fields are left empty so later rows do not shift out of alignment.
+The file does not control matching or publication.
 
 `left/` and `right/` contain Guide stereo output:
 
@@ -300,6 +298,6 @@ If one camera drops a frame, the corresponding fields are left empty so later ro
 - `imu/accel.csv`: accelerometer samples as `host_time,sensor_time,ax,ay,az,trigger_time`.
 - `imu/gyro.csv`: gyroscope samples as `host_time,sensor_time,gx,gy,gz,trigger_time`.
 
-`trigger_time` is empty if trigger synchronization is disabled or a sample cannot be mapped. `sensor_time` always retains the original RealSense timestamp.
+The trigger node preserves raw `sensor_time` in these files and records the mapped trigger-clock time for accepted IMU samples. The combined sample is published on `realsense/imu/data`.
 
 In trigger mode, Guide and RealSense image filenames use the PWM output time. In non-trigger mode, image filenames use the camera sensor time. All saved timestamps use `sec.nsec` format with 9 digits after the decimal point.

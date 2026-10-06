@@ -16,9 +16,6 @@ def generate_launch_description():
     guide_query_ms = LaunchConfiguration("guide_query_ms")
     imu_fps = LaunchConfiguration("imu_fps")
     imu_queue_size = LaunchConfiguration("imu_queue_size")
-    publish_combined_imu = LaunchConfiguration("publish_combined_imu")
-    sync_imu_to_trigger = LaunchConfiguration("sync_imu_to_trigger")
-    ros_stamp_host_clock = LaunchConfiguration("ros_stamp_host_clock")
     warmup = LaunchConfiguration("warmup")
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
@@ -27,12 +24,8 @@ def generate_launch_description():
     trigger_frequency = LaunchConfiguration("trigger_frequency")
     trigger_tolerance_ns = LaunchConfiguration("trigger_tolerance_ns")
     stereo_pair_tolerance_ns = LaunchConfiguration("stereo_pair_tolerance_ns")
-    stereo_trigger_tolerance_ns = LaunchConfiguration("stereo_trigger_tolerance_ns")
-    realsense_trigger_max_latency_ns = LaunchConfiguration("realsense_trigger_max_latency_ns")
-    stereo_pair_wait_ms = LaunchConfiguration("stereo_pair_wait_ms")
+    calibration_max_latency_ns = LaunchConfiguration("calibration_max_latency_ns")
     enable_guide_temperature = LaunchConfiguration("enable_guide_temperature")
-    depth_stream_enable = LaunchConfiguration("depth_stream_enable")
-    depth_processing_enable = LaunchConfiguration("depth_processing_enable")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = PathJoinSubstitution(
         [FindPackageShare("camera_capturer"), "rviz_cfg", "rgbdt.rviz"]
@@ -75,21 +68,6 @@ def generate_launch_description():
             description="Internal IMU producer queue size.",
         ),
         DeclareLaunchArgument(
-            "publish_combined_imu",
-            default_value="true",
-            description="Publish gyro-rate /realsense/imu/data with interpolated acceleration.",
-        ),
-        DeclareLaunchArgument(
-            "sync_imu_to_trigger",
-            default_value="true",
-            description="Interpolate IMU timestamps from depth hardware time to trigger Unix time.",
-        ),
-        DeclareLaunchArgument(
-            "ros_stamp_host_clock",
-            default_value="false",
-            description="Stamp camera images at GPIO capture time; mapped IMU uses the same trigger time axis.",
-        ),
-        DeclareLaunchArgument(
             "warmup",
             default_value="10",
             description="Seconds to wait after RealSense is ready before output starts.",
@@ -130,34 +108,14 @@ def generate_launch_description():
             description="Maximum left/right V4L2 sensor timestamp difference in nanoseconds.",
         ),
         DeclareLaunchArgument(
-            "stereo_trigger_tolerance_ns",
-            default_value="5000000",
-            description="Maximum paired Guide host timestamp to trigger capture difference in nanoseconds.",
-        ),
-        DeclareLaunchArgument(
-            "realsense_trigger_max_latency_ns",
+            "calibration_max_latency_ns",
             default_value="25000000",
-            description="Maximum delay from trigger capture to RealSense frame host time; must be below one trigger period.",
-        ),
-        DeclareLaunchArgument(
-            "stereo_pair_wait_ms",
-            default_value="120",
-            description="Maximum time to retain an unmatched Guide image.",
+            description="Measured upper bound on startup camera delivery latency; must be below one trigger period.",
         ),
         DeclareLaunchArgument(
             "enable_guide_temperature",
             default_value="false",
             description="Enable Guide temperature conversion and temperature topic publishing.",
-        ),
-        DeclareLaunchArgument(
-            "depth_stream_enable",
-            default_value="true",
-            description="Enable the RealSense depth stream.",
-        ),
-        DeclareLaunchArgument(
-            "depth_processing_enable",
-            default_value="true",
-            description="Process, publish, and save depth after trigger matching.",
         ),
         DeclareLaunchArgument(
             "use_rviz",
@@ -177,9 +135,6 @@ def generate_launch_description():
                 "guide_query_ms": guide_query_ms,
                 "imu_fps": imu_fps,
                 "imu_queue_size": imu_queue_size,
-                "publish_combined_imu": ParameterValue(publish_combined_imu, value_type=bool),
-                "sync_imu_to_trigger": ParameterValue(sync_imu_to_trigger, value_type=bool),
-                "ros_stamp_host_clock": ParameterValue(ros_stamp_host_clock, value_type=bool),
                 "warmup": warmup,
                 "serial_port": serial_port,
                 "serial_baud": serial_baud,
@@ -188,12 +143,8 @@ def generate_launch_description():
                 "trigger_frequency": trigger_frequency,
                 "trigger_tolerance_ns": trigger_tolerance_ns,
                 "stereo_pair_tolerance_ns": stereo_pair_tolerance_ns,
-                "stereo_trigger_tolerance_ns": stereo_trigger_tolerance_ns,
-                "realsense_trigger_max_latency_ns": realsense_trigger_max_latency_ns,
-                "stereo_pair_wait_ms": stereo_pair_wait_ms,
+                "calibration_max_latency_ns": calibration_max_latency_ns,
                 "enable_guide_temperature": ParameterValue(enable_guide_temperature, value_type=bool),
-                "depth_stream_enable": ParameterValue(depth_stream_enable, value_type=bool),
-                "depth_processing_enable": ParameterValue(depth_processing_enable, value_type=bool),
             }],
         ),
         Node(

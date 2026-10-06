@@ -12,11 +12,12 @@ public:
 
     bool open();
     void close();
-    void write(const GuideFrame& frame);
+    bool write(const GuideFrame& frame);
+    bool write_camera_temperature(const GuideTemperature& temperature);
     std::ofstream* temp_stream();
 
 private:
-    static void save_temperature_png(const cv::Mat& mat, const std::string& filename);
+    static bool save_temperature_png(const cv::Mat& mat, const std::string& filename);
 
     std::string output_dir_;
     std::string camera_name_;
