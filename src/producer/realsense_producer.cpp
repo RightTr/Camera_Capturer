@@ -607,8 +607,13 @@ void RealSenseProducer::run()
         spatial_filter_.set_option(RS2_OPTION_HOLES_FILL, 0);
     }
 
+    // Keep a short FIFO in strict VIO mode. poll_for_frames() returns the latest
+    // frame and can discard unread frames when this thread is briefly delayed.
+    rs2::frame_queue capture_queue(64, true);
     try {
-        rs2::pipeline_profile profile = pipeline.start(cfg);
+        rs2::pipeline_profile profile = imu_hardware_time_required_
+            ? pipeline.start(cfg, capture_queue)
+            : pipeline.start(cfg);
         if (on_start_) on_start_(profile);
 
         rs2::device live_dev = profile.get_device();
@@ -643,7 +648,10 @@ void RealSenseProducer::run()
 
     while (live()) {
         rs2::frameset frameset;
-        if (!pipeline.poll_for_frames(&frameset)) {
+        const bool received = imu_hardware_time_required_
+            ? capture_queue.try_wait_for_frame(&frameset, 20)
+            : pipeline.poll_for_frames(&frameset);
+        if (!received) {
             continue;
         }
 
@@ -714,6 +722,13 @@ void RealSenseProducer::run()
                           ? depth_frame_number - last_depth_frame_number
                           : 1ULL)))
             : 1U;
+        if (imu_hardware_time_required_ && tracking_initialized && trigger_step != 1) {
+            std::cerr << "[realsense] RGB-D frame gap: color "
+                      << last_color_frame_number << " -> " << color_frame_number
+                      << ", depth " << last_depth_frame_number << " -> "
+                      << depth_frame_number << ", sdk_queue="
+                      << capture_queue.size() << std::endl;
+        }
 
         bool has_frame_temperature = false;
         try {

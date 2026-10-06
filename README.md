@@ -221,6 +221,8 @@ A single coordinator publishes the four camera images and combined gyro-rate `re
 
 When saving is enabled, a separate writer thread handles PNG and CSV output. A full writer queue or write failure stops the capture. `rgbdt_trigger.launch.py` always enables and publishes depth; this mode no longer offers `depth_stream_enable` or `depth_processing_enable` overrides. Independent accel and gyro ROS topics are not published by this trigger node; accepted raw samples remain available in its CSV files.
 
+In strict trigger mode, a short RealSense SDK callback queue buffers framesets before the producer consumes them. A genuine RGB or depth frame-number gap still stops output, and the log shows both previous and current frame numbers. The four camera image publishers use reliable ROS 2 QoS so reliable subscribers can connect.
+
 The first 10 seconds after startup are a warm-up period. A continuous startup segment must be established within 10 seconds after warm-up; otherwise the node exits with an error.
 
 * RealSense launch

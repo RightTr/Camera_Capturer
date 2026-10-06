@@ -724,16 +724,16 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    g_guide_image_pubs[0] = advertise_sensor<ImageMsg>("guide_left/image", 4);
-    g_guide_image_pubs[1] = advertise_sensor<ImageMsg>("guide_right/image", 4);
+    g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 4);
+    g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 4);
     if (g_enable_guide_temperature) {
         g_guide_temp_pubs[0] = advertise_sensor<ImageMsg>("guide_left/temperature", 1);
         g_guide_temp_pubs[1] = advertise_sensor<ImageMsg>("guide_right/temperature", 1);
     }
     g_guide_camera_temp_pubs[0] = advertise<TemperatureMsg>("guide_left/camera_temperature", 5);
     g_guide_camera_temp_pubs[1] = advertise<TemperatureMsg>("guide_right/camera_temperature", 5);
-    g_rs_rgb_pub = advertise_sensor<ImageMsg>("realsense/rgb/image", 1);
-    g_rs_depth_pub = advertise_sensor<ImageMsg>("realsense/depth_raw/image", 1);
+    g_rs_rgb_pub = advertise<ImageMsg>("realsense/rgb/image", 4);
+    g_rs_depth_pub = advertise<ImageMsg>("realsense/depth_raw/image", 4);
     g_rs_temp_pub = advertise<TemperatureMsg>("realsense/camera_temperature", 5);
     g_rs_imu_pub = advertise<ImuMsg>("realsense/imu/data", 200);
     auto sync_sub = subscribe<Int32Msg>(
