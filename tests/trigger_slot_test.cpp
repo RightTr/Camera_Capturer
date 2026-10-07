@@ -32,4 +32,20 @@ int main()
            SlotAdvance::expired);
     assert(advance_slot({triggers[0]}, 11, lagged, assigned) == SlotAdvance::ready);
     assert(advance_slot({triggers[0]}, 12, lagged, assigned) == SlotAdvance::waiting);
+
+    // Forward loss preserves physical trigger positions without recalibration.
+    StreamSlot tolerant{true, 100, 10};
+    assert(advance_slot(triggers, 11, tolerant, assigned, true) == SlotAdvance::ready);
+    assert(advance_slot(triggers, 13, tolerant, assigned, true) == SlotAdvance::ready);
+    assert(assigned.id == 102 && tolerant.next_id == 103);
+    assert(advance_slot(triggers, 13, tolerant, assigned, true) == SlotAdvance::sequence_gap);
+
+    // A missing telemetry row drops its image, not the existing sequence offset.
+    StreamSlot telemetry_loss{true, 100, 10};
+    assert(advance_slot({triggers[0], triggers[2]}, 12, telemetry_loss, assigned, true) ==
+           SlotAdvance::expired);
+    assert(telemetry_loss.last_sequence == 10);
+    assert(advance_slot({triggers[0], triggers[2]}, 13, telemetry_loss, assigned, true) ==
+           SlotAdvance::ready);
+    assert(assigned.id == 102);
 }

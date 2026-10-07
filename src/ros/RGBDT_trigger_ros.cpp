@@ -28,6 +28,7 @@
 #include "utils/ros_utils.h"
 #include "utils/trigger_slot.h"
 #include "utils/vio_order.h"
+#include "utils/sync_recovery.h"
 #include "writer/guide_writer.h"
 #include "writer/realsense_writer.h"
 
@@ -45,11 +46,12 @@ std::atomic<bool> quitFlag(false);
 std::atomic<bool> fatalFlag(false);
 std::atomic<bool> g_output_started(false);
 SteadyClock::time_point g_output_start_at;
-SteadyClock::time_point g_preroll_deadline;
+SyncRecovery recovery;
 std::string outputdir;
 std::unique_ptr<GuideWriter> guide_writers[2];
 std::unique_ptr<RealSenseWriter> rs_writer;
 std::ofstream time_stream;
+std::ofstream recovery_stream;
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
 std::unique_ptr<SyncBridge> sync_bridge;
@@ -67,6 +69,8 @@ struct CameraSlot {
     std::optional<GuideFrame> left;
     std::optional<GuideFrame> right;
     std::optional<StampedRealSenseFrame> rgbd;
+    bool guide_done = false;
+    bool rgbd_done = false;
     bool complete() const { return left && right && rgbd; }
     imu_interpolation::Anchor anchor() const {
         return {trigger.id, rgbd->depth_sensor_ns, trigger.stamp_ns};
@@ -77,7 +81,8 @@ struct MappedImu {
     ImuMsg message;
 };
 struct WriteJob {
-    enum class Kind { slot, imu, temperature } kind;
+    enum class Kind { slot, imu, temperature, recovery } kind;
+    std::string recovery_line;
     std::shared_ptr<CameraSlot> slot;
     StampedImuFrame imu{};
     std::int64_t mapped_ns = 0;
@@ -92,6 +97,15 @@ std::map<std::uint64_t, CameraSlot> slots;
 std::deque<GuideFrame> left_frames;
 std::deque<GuideFrame> right_frames;
 std::deque<StampedImuFrame> imu_frames;
+std::deque<imu_interpolation::Anchor> depth_anchors;
+bool imu_timeline_started = false;
+std::int64_t last_published_imu_stamp = 0;
+std::uint64_t published_imu_count = 0;
+SteadyClock::time_point last_depth_anchor_at;
+std::uint64_t dropped_image_slots = 0;
+std::uint64_t published_guide_pairs = 0;
+std::uint64_t published_rgbd_pairs = 0;
+std::int64_t max_published_imu_dt_ns = 0;
 std::array<ImuTrack, 2> imu_tracks;
 std::array<std::uint32_t, 2> imu_stream_fps{};
 StreamSlot thermal_slot;
@@ -99,7 +113,6 @@ StreamSlot rgbd_slot;
 std::uint64_t last_right_sequence = 0;
 std::uint64_t next_trigger_id = 0;
 std::uint64_t epoch = 0;
-bool vio_active = false;
 std::int64_t last_trigger_stamp = 0;
 std::int64_t last_accepted_trigger_stamp = 0;
 std::optional<std::int64_t> trigger_clock_delta;
@@ -134,10 +147,31 @@ void stop_capture_quietly()
     writer_cv.notify_all();
 }
 bool output_enabled() { return g_output_started.load(std::memory_order_acquire); }
+bool enqueue_write(WriteJob job);
+void recovery_event_locked(const char* event, const char* reason)
+{
+    const auto elapsed = recovery.elapsed_ms(SteadyClock::now());
+    std::cerr << "[sync_recovery] " << event << " epoch=" << epoch
+              << " count=" << recovery.count << " elapsed_ms=" << elapsed
+              << " reason=" << reason << std::endl;
+    if (if_save) {
+        WriteJob job{WriteJob::Kind::recovery};
+        job.recovery_line = std::to_string(system_time_ns_now()) + "," +
+            std::to_string(epoch) + "," + std::to_string(recovery.count) + "," +
+            event + "," + std::to_string(elapsed) + "," + reason + "\n";
+        enqueue_write(std::move(job));
+    }
+}
 void reset_preroll_locked(const char* reason)
 {
-    if (vio_active) { fatal_stop(reason); return; }
-    std::cerr << "[sync] preroll restart: " << reason << std::endl;
+    // Once IMU has reached VIO, a new clock/IMU epoch cannot be silently
+    // appended to that integration session. Camera-only gaps never come here.
+    if (imu_timeline_started) {
+        std::cerr << "[vio] timeline invalid; downstream VIO reset required: " << reason << std::endl;
+        fatal_stop(reason);
+        return;
+    }
+    recovery.restart(SteadyClock::now());
     ++epoch;
     epoch_start_host_ns = system_time_ns_now();
     triggers.clear();
@@ -145,22 +179,22 @@ void reset_preroll_locked(const char* reason)
     left_frames.clear();
     right_frames.clear();
     imu_frames.clear();
+    depth_anchors.clear();
+    imu_tracks = {};
     thermal_slot = {};
     rgbd_slot = {};
     last_right_sequence = 0;
     last_trigger_stamp = 0;
+    trigger_clock_delta.reset();
+    // Producer queues remain bounded. Arrival timestamps reject stale frames
+    // without racing a producer reset against a newly calibrated epoch.
+    recovery_event_locked("start", reason);
     sync_cv.notify_all();
 }
 void restart_preroll(const char* reason)
 {
-    {
-        std::lock_guard<std::mutex> lock(sync_mutex);
-        reset_preroll_locked(reason);
-    }
-    if (quitFlag.load()) return;
-    for (auto& guide : guides) if (guide) guide->clear();
-    if (rs_prod) { rs_prod->clear_rgbd(); rs_prod->reset_rgbd_tracking(); }
-    if (sync_bridge) sync_bridge->clear();
+    std::lock_guard<std::mutex> lock(sync_mutex);
+    reset_preroll_locked(reason);
 }
 bool enqueue_write(WriteJob job)
 {
@@ -194,21 +228,27 @@ void writer_loop()
             bool good = true;
             if (job.kind == WriteJob::Kind::slot) {
                 const auto& slot = *job.slot;
-                good = guide_writers[0]->write(*slot.left) &&
-                       guide_writers[1]->write(*slot.right) &&
-                       rs_writer->write_rgbd(*slot.rgbd);
-                write_diag(slot.trigger, "thermal_left", to_ns_from_sec_usec(
-                    slot.left->sensor_sec, slot.left->sensor_microsec));
-                write_diag(slot.trigger, "thermal_right", to_ns_from_sec_usec(
-                    slot.right->sensor_sec, slot.right->sensor_microsec));
-                write_diag(slot.trigger, "rgb", to_ns_from_sec_usec(
-                    slot.rgbd->color_sensor_sec, slot.rgbd->color_sensor_microsec));
-                write_diag(slot.trigger, "depth", static_cast<std::int64_t>(
-                    slot.rgbd->depth_sensor_ns));
+                if (slot.left && slot.right) {
+                    good = guide_writers[0]->write(*slot.left) && guide_writers[1]->write(*slot.right);
+                    write_diag(slot.trigger, "thermal_left", to_ns_from_sec_usec(
+                        slot.left->sensor_sec, slot.left->sensor_microsec));
+                    write_diag(slot.trigger, "thermal_right", to_ns_from_sec_usec(
+                        slot.right->sensor_sec, slot.right->sensor_microsec));
+                }
+                if (slot.rgbd) {
+                    good = rs_writer->write_rgbd(*slot.rgbd) && good;
+                    write_diag(slot.trigger, "rgb", to_ns_from_sec_usec(
+                        slot.rgbd->color_sensor_sec, slot.rgbd->color_sensor_microsec));
+                    write_diag(slot.trigger, "depth", static_cast<std::int64_t>(slot.rgbd->depth_sensor_ns));
+                }
                 time_stream.flush();
                 good = good && time_stream.good();
             } else if (job.kind == WriteJob::Kind::imu) {
                 good = rs_writer->write_imu(job.imu, job.mapped_ns);
+            } else if (job.kind == WriteJob::Kind::recovery) {
+                recovery_stream << job.recovery_line;
+                recovery_stream.flush();
+                good = recovery_stream.good();
             } else {
                 good = guide_writers[job.camera_id]->write_camera_temperature(job.temperature);
             }
@@ -231,6 +271,10 @@ bool open_writers(const std::string& base_dir, bool save_images)
     if (!time_stream.is_open()) return false;
     time_stream << "trigger_id,trigger_time,source,sensor_time\n";
     time_stream.flush();
+    recovery_stream.open(base_dir + "/recovery_events.csv");
+    recovery_stream << "host_time_ns,epoch,recovery_count,event,elapsed_ms,reason\n";
+    recovery_stream.flush();
+    if (!recovery_stream.good()) return false;
     rs_writer = std::make_unique<RealSenseWriter>(base_dir, save_images);
     return time_stream.good() && rs_writer->open();
 }
@@ -268,19 +312,18 @@ std::optional<Trigger> assign_slot(std::uint64_t sequence, std::int64_t host_ns,
             }
         } else {
             Trigger result;
-            const auto advance = advance_slot(triggers, sequence, stream, result);
-            if (advance == SlotAdvance::sequence_gap || advance == SlotAdvance::expired) {
-                lock.unlock();
-                restart_preroll(advance == SlotAdvance::sequence_gap
-                    ? "camera frame number discontinuity" : "trigger slot expired");
+            const auto advance = advance_slot(triggers, sequence, stream, result, true);
+            if (advance == SlotAdvance::sequence_gap) {
+                reset_preroll_locked("Camera sequence moved backwards");
                 return std::nullopt;
             }
+            // A missing trigger row invalidates only this image, not the IMU clock.
+            if (advance == SlotAdvance::expired) return std::nullopt;
             if (advance == SlotAdvance::ready) return result;
         }
         if (sync_cv.wait_until(lock, deadline) == std::cv_status::timeout) break;
     }
-    if (stream.calibrated && epoch == expected_epoch && vio_active)
-        fatal_stop("Camera trigger slot timeout");
+    // Keep the calibrated sequence offset; the next image may skip this slot.
     return std::nullopt;
 }
 void trigger_loop()
@@ -289,24 +332,31 @@ void trigger_loop()
         const TriggerEvent event = sync_bridge->take_trigger_event();
         if (quitFlag.load()) break;
         if (event.trigger_output_unix_ns <= 0 || event.trigger_capture_unix_ns <= 0) {
-            fatal_stop("SyncBridge returned an invalid trigger"); break;
+            fatal_stop("SyncBridge stopped or returned an invalid trigger"); break;
         }
         if (!output_enabled()) {
             if (SteadyClock::now() < g_output_start_at) continue;
             restart_preroll("warm-up complete");
-            g_preroll_deadline = SteadyClock::now() + std::chrono::seconds(10);
             g_output_started.store(true, std::memory_order_release);
             continue;
         }
         std::lock_guard<std::mutex> lock(sync_mutex);
+        if (event.trigger_capture_unix_ns < epoch_start_host_ns) continue;
         const auto delta = event.trigger_capture_unix_ns - event.trigger_output_unix_ns;
-        if (event.trigger_output_unix_ns <= last_accepted_trigger_stamp ||
-            (trigger_clock_delta && std::llabs(delta - *trigger_clock_delta) > trigger_tolerance_ns) ||
-            (last_trigger_stamp && std::llabs(event.trigger_output_unix_ns -
-                last_trigger_stamp - trigger_period_ns) > trigger_tolerance_ns)) {
-            reset_preroll_locked("Trigger clock or sequence discontinuity");
-            if (!quitFlag.load()) sync_bridge->clear();
+        if (event.trigger_output_unix_ns <= last_accepted_trigger_stamp) {
+            reset_preroll_locked("Trigger clock moved backwards");
             continue;
+        }
+        if (last_trigger_stamp) {
+            const auto elapsed = event.trigger_output_unix_ns - last_trigger_stamp;
+            const auto steps = std::max<std::int64_t>(1,
+                (elapsed + trigger_period_ns / 2) / trigger_period_ns);
+            if (std::llabs(elapsed - steps * trigger_period_ns) > trigger_tolerance_ns) {
+                reset_preroll_locked("Trigger clock discontinuity");
+                continue;
+            }
+            // Preserve physical frame positions if trigger telemetry loses an edge.
+            next_trigger_id += static_cast<std::uint64_t>(steps - 1);
         }
         if (!trigger_clock_delta) trigger_clock_delta = delta;
         last_trigger_stamp = event.trigger_output_unix_ns;
@@ -316,7 +366,10 @@ void trigger_loop()
         triggers.push_back(trigger);
         slots.emplace(trigger.id, CameraSlot{trigger});
         if (triggers.size() > kMaxTriggers) triggers.pop_front();
-        if (slots.size() > kMaxSlots) reset_preroll_locked("Camera slot queue overflow");
+        if (slots.size() > kMaxSlots) {
+            slots.erase(slots.begin());
+            ++dropped_image_slots;
+        }
         sync_cv.notify_all();
     }
     if (!quitFlag.load()) fatal_stop("Trigger loop stopped");
@@ -330,13 +383,15 @@ void guide_consumer(int cam_id)
         std::uint64_t seen_epoch;
         { std::lock_guard<std::mutex> lock(sync_mutex); seen_epoch = epoch; }
         if (!guides[cam_id]->materialize(frame)) {
-            restart_preroll("Thermal frame conversion failed"); continue;
+            continue; // Drop only this image; continuous IMU must be retained.
         }
         std::lock_guard<std::mutex> lock(sync_mutex);
         if (seen_epoch != epoch || quitFlag.load()) continue;
+        if (to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec) <
+            epoch_start_host_ns + trigger_period_ns) continue;
         auto& queue = cam_id == 0 ? left_frames : right_frames;
         queue.push_back(std::move(frame));
-        if (queue.size() > kMaxGuideFrames) reset_preroll_locked("Thermal queue overflow");
+        if (queue.size() > kMaxGuideFrames) queue.pop_front();
         sync_cv.notify_all();
     }
     if (!quitFlag.load()) fatal_stop("Guide image consumer stopped");
@@ -356,14 +411,15 @@ void guide_pair_consumer()
             const auto right_ns = to_ns_from_sec_usec(right_frames.front().sensor_sec,
                                                        right_frames.front().sensor_microsec);
             if (std::llabs(left_ns - right_ns) > stereo_pair_tolerance_ns) {
-                reset_preroll_locked("Thermal stereo frame mismatch");
+                if (left_ns < right_ns) left_frames.pop_front();
+                else right_frames.pop_front();
                 continue;
             }
             left = std::move(left_frames.front()); left_frames.pop_front();
             right = std::move(right_frames.front()); right_frames.pop_front();
             seen_epoch = epoch;
-            if (last_right_sequence && right.sequence != last_right_sequence + 1) {
-                reset_preroll_locked("Right thermal sequence gap");
+            if (last_right_sequence && right.sequence <= last_right_sequence) {
+                reset_preroll_locked("Right thermal sequence moved backwards");
                 continue;
             }
         }
@@ -376,13 +432,19 @@ void guide_pair_consumer()
         if (epoch != seen_epoch || quitFlag.load()) continue;
         last_right_sequence = right.sequence;
         auto it = slots.find(trigger->id);
-        if (it == slots.end() || it->second.left || it->second.right) {
-            reset_preroll_locked("Thermal slot missing or duplicate"); continue;
+        if (it == slots.end() || it->second.guide_done || it->second.left || it->second.right) {
+            continue; // Slot already expired; do not disturb the IMU timeline.
         }
         it->second.left.emplace(std::move(left));
         it->second.right.emplace(std::move(right));
         sync_cv.notify_all();
     }
+}
+bool accept_rgbd_locked(const StampedRealSenseFrame& frame)
+{
+    if (to_ns_from_sec_nsec(frame.color_host_sec, frame.color_host_nanosec) <
+        epoch_start_host_ns + trigger_period_ns) return false;
+    return true;
 }
 void realsense_consumer()
 {
@@ -395,24 +457,34 @@ void realsense_consumer()
         {
             std::lock_guard<std::mutex> lock(sync_mutex);
             if (seen_epoch != epoch) continue;
-            if (frame.trigger_step != 1 && rgbd_slot.calibrated) {
-                reset_preroll_locked("RealSense color/depth frame number gap");
-                continue;
-            }
+            if (!accept_rgbd_locked(frame)) continue;
         }
         const auto host_ns = to_ns_from_sec_nsec(frame.color_host_sec, frame.color_host_nanosec);
         auto trigger = assign_slot(frame.depth_frame_number, host_ns, rgbd_slot, seen_epoch);
         if (!trigger) continue;
-        if (!frame.has_depth || frame.depth_sensor_ns == 0 || !rs_prod->process_rgbd(frame) ||
+        if (!frame.has_depth || frame.depth_sensor_ns == 0) {
+            restart_preroll("Depth hardware timestamp unavailable"); continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(sync_mutex);
+            if (epoch != seen_epoch || quitFlag.load()) continue;
+            // Clock anchors must not depend on thermal pairing or depth processing.
+            depth_anchors.push_back({trigger->id, frame.depth_sensor_ns, trigger->stamp_ns});
+            last_depth_anchor_at = SteadyClock::now();
+            if (depth_anchors.size() > kMaxTriggers)
+                reset_preroll_locked("Depth clock anchor queue overflow");
+            sync_cv.notify_all();
+        }
+        if (!rs_prod->process_rgbd(frame) ||
             frame.color_image.empty() || frame.depth_image_raw.empty()) {
-            restart_preroll("RGB-D slot processing failed"); continue;
+            continue; // Its valid hardware-time anchor was already retained.
         }
         std::lock_guard<std::mutex> lock(sync_mutex);
         if (epoch != seen_epoch || quitFlag.load()) continue;
         frame.trigger_unix_ns = trigger->stamp_ns;
         auto it = slots.find(trigger->id);
-        if (it == slots.end() || it->second.rgbd) {
-            reset_preroll_locked("RGB-D slot missing or duplicate"); continue;
+        if (it == slots.end() || it->second.rgbd_done || it->second.rgbd) {
+            continue; // Image expired; its IMU anchor remains usable.
         }
         it->second.rgbd.emplace(std::move(frame));
         sync_cv.notify_all();
@@ -459,16 +531,17 @@ void imu_consumer()
             track, frame.frame_number, frame.sensor_ns,
             static_cast<std::uint64_t>(2.0e9 / frame.fps), SteadyClock::now());
         if (continuity != ImuContinuity::ready) {
-            fatal_stop(continuity == ImuContinuity::unavailable
-                ? "IMU frame number or hardware time unavailable"
-                : "IMU frame number or hardware time gap");
-            break;
+            if (continuity == ImuContinuity::unavailable) {
+                fatal_stop("IMU frame number or hardware time unavailable"); break;
+            }
+            reset_preroll_locked("IMU frame number or hardware time gap");
+            continue;
         }
         auto pos = std::upper_bound(imu_frames.begin(), imu_frames.end(), frame.sensor_ns,
             [](std::uint64_t ns, const StampedImuFrame& item) { return ns < item.sensor_ns; });
         imu_frames.insert(pos, std::move(frame));
         if (imu_frames.size() > static_cast<std::size_t>(g_imu_queue_size)) {
-            fatal_stop("IMU queue overflow"); break;
+            reset_preroll_locked("IMU queue overflow"); continue;
         }
         sync_cv.notify_all();
     }
@@ -477,11 +550,18 @@ void imu_consumer()
 
 bool map_interval_locked(const imu_interpolation::Anchor& first,
                          const imu_interpolation::Anchor& second,
-                         std::deque<MappedImu>& mapped, std::int64_t& last_mapped_stamp)
+                         std::deque<MappedImu>& mapped, std::int64_t& last_mapped_stamp,
+                         std::deque<WriteJob>& pending_imu_writes)
 {
-    if (second.frame_id != first.frame_id + 1 ||
+    if (second.frame_id <= first.frame_id ||
         second.sensor_ns <= first.sensor_ns || second.trigger_ns <= first.trigger_ns) {
         reset_preroll_locked("Depth anchor discontinuity"); return false;
+    }
+    const auto expected_ns = static_cast<std::int64_t>(second.frame_id - first.frame_id) * trigger_period_ns;
+    if (std::llabs((second.trigger_ns - first.trigger_ns) - expected_ns) > trigger_tolerance_ns ||
+        std::llabs(static_cast<std::int64_t>(second.sensor_ns - first.sensor_ns) - expected_ns) >
+            std::max<std::int64_t>(trigger_tolerance_ns, expected_ns / 100)) {
+        reset_preroll_locked("Depth and trigger elapsed times disagree"); return false;
     }
     if (!imu_tracks[0].seen || !imu_tracks[1].seen ||
         imu_tracks[0].sensor_ns <= second.sensor_ns ||
@@ -505,7 +585,7 @@ bool map_interval_locked(const imu_interpolation::Anchor& first,
         const auto stamp_ns = imu_interpolation::trigger_time(first, second, gyro.sensor_ns);
         if (stamp_ns <= last_mapped_stamp || stamp_ns < first.trigger_ns ||
             stamp_ns >= second.trigger_ns) {
-            reset_preroll_locked("Mapped IMU timestamp is not strictly increasing"); return false;
+            fatal_stop("Mapped IMU timestamp is not strictly increasing"); return false;
         }
         ImuMsg msg;
         msg.header.frame_id = "realsense_imu";
@@ -534,7 +614,7 @@ bool map_interval_locked(const imu_interpolation::Anchor& first,
             WriteJob job{WriteJob::Kind::imu};
             job.imu = raw;
             job.mapped_ns = imu_interpolation::trigger_time(first, second, raw.sensor_ns);
-            if (!enqueue_write(std::move(job))) return false;
+            pending_imu_writes.push_back(std::move(job));
         }
     }
     auto keep = imu_frames.end();
@@ -549,27 +629,30 @@ bool map_interval_locked(const imu_interpolation::Anchor& first,
 void publish_slot(const CameraSlot& slot)
 {
     const auto stamp = make_time_ns(static_cast<std::uint64_t>(slot.trigger.stamp_ns));
-    publish_image(g_guide_image_pubs[0], slot.left->gray_image, "mono8", "guide_left", stamp);
-    publish_image(g_guide_image_pubs[1], slot.right->gray_image, "mono8", "guide_right", stamp);
-    publish_image(g_rs_rgb_pub, slot.rgbd->color_image, "bgr8", "realsense_color", stamp);
-    publish_image(g_rs_depth_pub, slot.rgbd->depth_image_raw, "16UC1", "realsense_depth", stamp);
-    if (g_enable_guide_temperature) {
-        publish_image(g_guide_temp_pubs[0], slot.left->temperature_celsius,
-                      "32FC1", "guide_left", stamp);
-        publish_image(g_guide_temp_pubs[1], slot.right->temperature_celsius,
-                      "32FC1", "guide_right", stamp);
+    if (slot.left && slot.right) {
+        publish_image(g_guide_image_pubs[0], slot.left->gray_image, "mono8", "guide_left", stamp);
+        publish_image(g_guide_image_pubs[1], slot.right->gray_image, "mono8", "guide_right", stamp);
+        if (g_enable_guide_temperature) {
+            publish_image(g_guide_temp_pubs[0], slot.left->temperature_celsius,
+                          "32FC1", "guide_left", stamp);
+            publish_image(g_guide_temp_pubs[1], slot.right->temperature_celsius,
+                          "32FC1", "guide_right", stamp);
+        }
     }
-    publish_temperature(g_rs_temp_pub, "realsense", stamp,
-                        slot.rgbd->temperature_celsius);
+    if (slot.rgbd) {
+        publish_image(g_rs_rgb_pub, slot.rgbd->color_image, "bgr8", "realsense_color", stamp);
+        publish_image(g_rs_depth_pub, slot.rgbd->depth_image_raw, "16UC1", "realsense_depth", stamp);
+        publish_temperature(g_rs_temp_pub, "realsense", stamp, slot.rgbd->temperature_celsius);
+    }
 }
 void coordinator_loop()
 {
     std::optional<imu_interpolation::Anchor> mapped_anchor;
-    std::optional<std::uint64_t> next_complete_id;
     std::uint64_t seen_epoch = 0;
     std::int64_t last_mapped_stamp = 0;
-    std::int64_t last_published_imu_stamp = 0;
-    std::deque<std::shared_ptr<CameraSlot>> complete;
+    std::int64_t last_guide_stamp = 0;
+    std::int64_t last_rgbd_stamp = 0;
+    std::deque<WriteJob> pending_imu_writes;
     std::deque<MappedImu> mapped;
     while (!quitFlag.load()) {
         std::unique_lock<std::mutex> lock(sync_mutex);
@@ -578,100 +661,111 @@ void coordinator_loop()
         if (seen_epoch != epoch) {
             seen_epoch = epoch;
             mapped_anchor.reset();
-            next_complete_id.reset();
-            complete.clear();
             mapped.clear();
+            pending_imu_writes.clear();
             last_mapped_stamp = 0;
         }
-        if (!vio_active && SteadyClock::now() >= g_preroll_deadline) {
-            fatal_stop("No continuous VIO startup segment within ten seconds");
-            break;
+        if (recovery.warning_due(SteadyClock::now()))
+            recovery_event_locked("waiting", "No valid depth and IMU clock segment");
+        if (!mapped_anchor && !depth_anchors.empty()) {
+            mapped_anchor = depth_anchors.front();
+            depth_anchors.pop_front();
+            // The initial anchor has no preceding IMU interval for VIO.
+            while (!slots.empty() && slots.begin()->first <= mapped_anchor->frame_id)
+                slots.erase(slots.begin());
         }
-        if (!mapped_anchor) {
-            for (auto it = slots.begin(); it != slots.end(); ++it) {
-                if (!it->second.complete()) continue;
-                mapped_anchor = it->second.anchor();
-                next_complete_id = it->first + 1;
-                slots.erase(slots.begin(), std::next(it));
-                std::cerr << "[sync] baseline trigger " << mapped_anchor->frame_id
-                          << " retained as IMU anchor" << std::endl;
-                break;
-            }
-        }
-        if (!mapped_anchor || !next_complete_id) continue;
-        for (;;) {
-            auto it = slots.find(*next_complete_id);
-            if (it == slots.end() || !it->second.complete()) break;
-            complete.push_back(std::make_shared<CameraSlot>(std::move(it->second)));
-            slots.erase(it);
-            ++*next_complete_id;
-            if (complete.size() > kMaxSlots) {
-                reset_preroll_locked("Completed slots waiting for IMU overflow");
-                break;
-            }
-        }
-        if (quitFlag.load() || seen_epoch != epoch) continue;
-        for (const auto& slot : complete) {
-            if (slot->trigger.id <= mapped_anchor->frame_id) continue;
-            const auto next = slot->anchor();
-            if (!imu_tracks[0].seen || !imu_tracks[1].seen ||
-                imu_tracks[0].sensor_ns <= next.sensor_ns ||
-                imu_tracks[1].sensor_ns <= next.sensor_ns) break;
-            if (!map_interval_locked(*mapped_anchor, next, mapped, last_mapped_stamp)) break;
+        while (mapped_anchor && !depth_anchors.empty()) {
+            const auto next = depth_anchors.front();
+            if (!map_interval_locked(*mapped_anchor, next, mapped, last_mapped_stamp,
+                                     pending_imu_writes)) break;
             mapped_anchor = next;
+            depth_anchors.pop_front();
         }
         if (quitFlag.load()) break;
         if (seen_epoch != epoch) continue;
-        if (!slots.empty()) {
-            const auto oldest = slots.begin();
-            if (oldest->first <= *next_complete_id &&
-                SteadyClock::now() - oldest->second.created >
-                    std::chrono::nanoseconds(3 * trigger_period_ns)) {
-                reset_preroll_locked("Incomplete camera slot timeout");
-                continue;
+        // Publish every real IMU sample as soon as its depth-clock interval is
+        // known, even if a thermal/RGB image is missing. Never synthesize samples.
+        while (!mapped.empty()) {
+            const auto& sample = mapped.front();
+            if (sample.stamp_ns <= last_published_imu_stamp) {
+                fatal_stop("Published IMU timestamp is not increasing"); break;
             }
+            if (last_published_imu_stamp)
+                max_published_imu_dt_ns = std::max(max_published_imu_dt_ns,
+                    sample.stamp_ns - last_published_imu_stamp);
+            publish(g_rs_imu_pub, sample.message);
+            last_published_imu_stamp = sample.stamp_ns;
+            ++published_imu_count;
+            imu_timeline_started = true;
+            mapped.pop_front();
         }
-        const auto now = SteadyClock::now();
-        if (mapped_anchor && (imu_tracks[0].seen && imu_tracks[1].seen) &&
-            (now - imu_tracks[0].arrived > std::chrono::nanoseconds(3 * trigger_period_ns) ||
-             now - imu_tracks[1].arrived > std::chrono::nanoseconds(3 * trigger_period_ns))) {
-            fatal_stop("IMU stream watchdog timeout"); break;
+        if (quitFlag.load()) break;
+        while (!pending_imu_writes.empty()) {
+            if (!enqueue_write(std::move(pending_imu_writes.front()))) break;
+            pending_imu_writes.pop_front();
         }
-        while (!complete.empty() && complete.front()->trigger.id < mapped_anchor->frame_id) {
-            const auto image_ns = complete.front()->trigger.stamp_ns;
-            const auto crossing_count = imu_count_to_cross(mapped, image_ns);
-            if (!crossing_count) break;
-            const auto slot = complete.front();
-            complete.pop_front();
-            std::vector<MappedImu> emit;
-            for (std::size_t i = 0; i < *crossing_count; ++i) {
-                emit.push_back(std::move(mapped.front()));
-                mapped.pop_front();
-            }
-            if (if_save) {
-                WriteJob job{WriteJob::Kind::slot};
-                job.slot = slot;
-                if (!enqueue_write(std::move(job))) break;
-            }
-            // This is the only publisher of VIO images and combined IMU.
-            vio_active = true;
-            lock.unlock();
-            for (const auto& sample : emit) {
-                if (quitFlag.load()) break;
-                if (sample.stamp_ns <= last_published_imu_stamp) {
-                    fatal_stop("Published IMU timestamp is not increasing"); break;
+        if (quitFlag.load()) break;
+        // Air-VINS consumes the Guide stereo pair. It must not wait for an
+        // unrelated RGB/depth image. Each pair is ordered on its own stream.
+        for (auto it = slots.begin(); it != slots.end();) {
+            auto& pending = it->second;
+            const auto stamp = pending.trigger.stamp_ns;
+            if (last_published_imu_stamp > stamp) {
+                auto emit = std::make_shared<CameraSlot>();
+                emit->trigger = pending.trigger;
+                if (!pending.guide_done && pending.left && pending.right) {
+                    if (stamp > last_guide_stamp) {
+                        pending.left->trigger_unix_ns = stamp;
+                        pending.right->trigger_unix_ns = stamp;
+                        emit->left = std::move(pending.left);
+                        emit->right = std::move(pending.right);
+                        last_guide_stamp = stamp;
+                    }
+                    pending.left.reset(); pending.right.reset();
+                    pending.guide_done = true;
                 }
-                publish(g_rs_imu_pub, sample.message);
-                last_published_imu_stamp = sample.stamp_ns;
+                if (!pending.rgbd_done && pending.rgbd) {
+                    if (stamp > last_rgbd_stamp) {
+                        emit->rgbd = std::move(pending.rgbd);
+                        last_rgbd_stamp = stamp;
+                    }
+                    pending.rgbd.reset();
+                    pending.rgbd_done = true;
+                }
+                if (emit->left || emit->rgbd) {
+                    if (!recovery.active()) {
+                        recovery_event_locked("resumed", "Continuous IMU and image pair ready");
+                        recovery.resume();
+                    }
+                    if (if_save) {
+                        WriteJob job{WriteJob::Kind::slot};
+                        job.slot = emit;
+                        if (!enqueue_write(std::move(job))) break;
+                    }
+                    publish_slot(*emit);
+                    if (emit->left) ++published_guide_pairs;
+                    if (emit->rgbd) ++published_rgbd_pairs;
+                }
             }
-            if (!quitFlag.load() && last_published_imu_stamp > image_ns)
-                publish_slot(*slot);
-            else if (!quitFlag.load()) fatal_stop("IMU did not cross image time");
-            lock.lock();
-            if (quitFlag.load()) break;
+            if (pending.guide_done && pending.rgbd_done) it = slots.erase(it);
+            else if (SteadyClock::now() - pending.created >
+                     std::chrono::nanoseconds(3 * trigger_period_ns)) {
+                it = slots.erase(it);
+                ++dropped_image_slots;
+            } else ++it;
+        }
+        sync_cv.notify_all();
+        if (imu_timeline_started && last_depth_anchor_at != SteadyClock::time_point{} &&
+            SteadyClock::now() - last_depth_anchor_at > std::chrono::nanoseconds(3 * trigger_period_ns))
+            reset_preroll_locked("Depth clock anchor watchdog timeout");
+        if (imu_timeline_started &&
+            (SteadyClock::now() - imu_tracks[0].arrived > std::chrono::nanoseconds(3 * trigger_period_ns) ||
+             SteadyClock::now() - imu_tracks[1].arrived > std::chrono::nanoseconds(3 * trigger_period_ns))) {
+            reset_preroll_locked("IMU stream watchdog timeout");
         }
     }
 }
+
 int main(int argc, char **argv)
 {
     signal(SIGINT, signal_handler);
@@ -876,6 +970,11 @@ int main(int argc, char **argv)
         time_stream.flush();
     }
 
+    std::cerr << "[vio_continuity] imu=" << published_imu_count
+              << " max_imu_dt_ms=" << max_published_imu_dt_ns / 1.0e6
+              << " guide_pairs=" << published_guide_pairs
+              << " rgbd_pairs=" << published_rgbd_pairs
+              << " incomplete_image_slots=" << dropped_image_slots << std::endl;
     shutdown();
     return fatalFlag.load() ? EXIT_FAILURE : EXIT_SUCCESS;
 }

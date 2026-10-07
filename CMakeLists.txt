@@ -320,5 +320,18 @@ if(USE_ROS2)
         install(DIRECTORY rviz_cfg
             DESTINATION share/${PROJECT_NAME})
     endif()
+    if(BUILD_TESTING)
+        get_target_property(recovery_sources rgbdt_trigger_node SOURCES)
+        list(REMOVE_ITEM recovery_sources src/ros/RGBDT_trigger_ros.cpp)
+        add_executable(sync_recovery_test tests/sync_recovery_test.cpp ${recovery_sources})
+        target_include_directories(sync_recovery_test PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS})
+        target_compile_options(sync_recovery_test PRIVATE -UNDEBUG)
+        ament_target_dependencies(sync_recovery_test rclcpp sensor_msgs std_msgs)
+        target_link_libraries(sync_recovery_test ${OpenCV_LIBS} pthread serial
+            sync_bridge realsense2::realsense2)
+        add_test(NAME sync_recovery_test COMMAND sync_recovery_test)
+        set_tests_properties(sync_recovery_test PROPERTIES TIMEOUT 30)
+    endif()
     ament_package() # Don't forget this
 endif()

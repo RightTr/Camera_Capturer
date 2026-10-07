@@ -18,19 +18,24 @@ enum class SlotAdvance { waiting, ready, sequence_gap, expired };
 
 inline SlotAdvance advance_slot(const std::deque<Trigger>& triggers,
                                 std::uint64_t sequence, StreamSlot& stream,
-                                Trigger& result)
+                                Trigger& result, bool allow_forward_gaps = false)
 {
-    if (sequence != stream.last_sequence + 1) return SlotAdvance::sequence_gap;
-    if (!triggers.empty() && stream.next_id < triggers.front().id)
+    if (sequence <= stream.last_sequence ||
+        (!allow_forward_gaps && sequence != stream.last_sequence + 1))
+        return SlotAdvance::sequence_gap;
+    const auto target_id = stream.next_id + sequence - stream.last_sequence - 1;
+    if (!triggers.empty() && target_id < triggers.front().id)
         return SlotAdvance::expired;
     for (const auto& trigger : triggers) {
-        if (trigger.id == stream.next_id) {
+        if (trigger.id == target_id) {
             result = trigger;
             stream.last_sequence = sequence;
-            ++stream.next_id;
+            stream.next_id = target_id + 1;
             return SlotAdvance::ready;
         }
     }
+    if (allow_forward_gaps && !triggers.empty() && target_id < triggers.back().id)
+        return SlotAdvance::expired;
     return SlotAdvance::waiting;
 }
 
