@@ -1,14 +1,60 @@
-#include "sync_bridge/sync_bridge.h"
+#include "sync/sync_bridge.h"
 
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include <gpiod.h>
 #include <libserial/SerialPort.h>
 
-#include "utils/common_utils.h"
+#include "sync/time_utils.h"
+
+namespace {
+
+std::uint64_t read_u64_le(const unsigned char* data)
+{
+    std::uint64_t value = 0;
+    for (int i = 0; i < 8; ++i) {
+        value |= static_cast<std::uint64_t>(data[i]) << (8 * i);
+    }
+    return value;
+}
+
+unsigned char checksum(unsigned char cmd,
+                       unsigned char length,
+                       const unsigned char* payload)
+{
+    unsigned char value = cmd ^ length;
+    for (unsigned char i = 0; i < length; ++i) {
+        value ^= payload[i];
+    }
+    return value;
+}
+
+void log_errno(const char* message)
+{
+    std::fprintf(stderr, "%s: %s (errno=%d)\n", message, std::strerror(errno), errno);
+}
+
+LibSerial::BaudRate set_baudrate(int baud)
+{
+    switch (baud) {
+    case 9600: return LibSerial::BaudRate::BAUD_9600;
+    case 19200: return LibSerial::BaudRate::BAUD_19200;
+    case 38400: return LibSerial::BaudRate::BAUD_38400;
+    case 57600: return LibSerial::BaudRate::BAUD_57600;
+    case 115200: return LibSerial::BaudRate::BAUD_115200;
+    case 230400: return LibSerial::BaudRate::BAUD_230400;
+    case 460800: return LibSerial::BaudRate::BAUD_460800;
+    case 921600: return LibSerial::BaudRate::BAUD_921600;
+    default: return LibSerial::BaudRate::BAUD_115200;
+    }
+}
+
+}  // namespace
 
 constexpr const char* kConsumerName = "cap_trigger";
 constexpr unsigned char kRxFrameHead0 = 0xFF;

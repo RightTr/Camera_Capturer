@@ -16,9 +16,9 @@
 
 #include "device_path.h"
 #include "producer/guide_producer.h"
-#include "utils/stereo_pair_buffer.h"
-#include "sync_bridge/sync_bridge.h"
-#include "utils/common_utils.h"
+#include "sync/stereo_pair_buffer.h"
+#include "sync/sync_bridge.h"
+#include "sync/time_utils.h"
 #include "utils/ros_utils.h"
 #include "writer/guide_writer.h"
 

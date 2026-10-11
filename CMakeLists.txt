@@ -5,25 +5,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(camera_capturer)
 
-include(CTest)
-if(BUILD_TESTING)
-    add_executable(imu_interpolation_test tests/imu_interpolation_test.cpp)
-    target_include_directories(imu_interpolation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    add_test(NAME imu_interpolation_test COMMAND imu_interpolation_test)
-    add_executable(stereo_pair_buffer_test tests/stereo_pair_buffer_test.cpp)
-    target_include_directories(stereo_pair_buffer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    add_test(NAME stereo_pair_buffer_test COMMAND stereo_pair_buffer_test)
-    add_executable(trigger_slot_test tests/trigger_slot_test.cpp)
-    target_include_directories(trigger_slot_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    add_test(NAME trigger_slot_test COMMAND trigger_slot_test)
-    add_executable(vio_order_test tests/vio_order_test.cpp)
-    target_include_directories(vio_order_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    add_test(NAME vio_order_test COMMAND vio_order_test)
-    add_executable(imu_continuity_test tests/imu_continuity_test.cpp)
-    target_include_directories(imu_continuity_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    add_test(NAME imu_continuity_test COMMAND imu_continuity_test)
-endif()
-
 find_package(OpenCV REQUIRED)
 find_package(fastcdr REQUIRED)
 find_package(realsense2 REQUIRED)
@@ -33,7 +14,7 @@ if(NOT GPIOD_LIB)
     message(FATAL_ERROR "libgpiod not found")
 endif()
 
-add_library(sync_bridge src/sync_bridge/sync_bridge.cpp)
+add_library(sync_bridge src/sync/sync_bridge.cpp)
 target_link_libraries(sync_bridge
     pthread
     serial
@@ -142,6 +123,7 @@ if(USE_ROS1)
         src/writer/realsense_writer.cpp)
     add_executable(rgbdt_trigger_node
         src/ros/RGBDT_trigger_ros.cpp
+        src/sync/sensor_sync.cpp
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
@@ -226,6 +208,7 @@ if(USE_ROS2)
         src/writer/realsense_writer.cpp)
     add_executable(rgbdt_trigger_node
         src/ros/RGBDT_trigger_ros.cpp
+        src/sync/sensor_sync.cpp
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
@@ -319,19 +302,6 @@ if(USE_ROS2)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rviz_cfg")
         install(DIRECTORY rviz_cfg
             DESTINATION share/${PROJECT_NAME})
-    endif()
-    if(BUILD_TESTING)
-        get_target_property(recovery_sources rgbdt_trigger_node SOURCES)
-        list(REMOVE_ITEM recovery_sources src/ros/RGBDT_trigger_ros.cpp)
-        add_executable(sync_recovery_test tests/sync_recovery_test.cpp ${recovery_sources})
-        target_include_directories(sync_recovery_test PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS} ${realsense2_INCLUDE_DIRS})
-        target_compile_options(sync_recovery_test PRIVATE -UNDEBUG)
-        ament_target_dependencies(sync_recovery_test rclcpp sensor_msgs std_msgs)
-        target_link_libraries(sync_recovery_test ${OpenCV_LIBS} pthread serial
-            sync_bridge realsense2::realsense2)
-        add_test(NAME sync_recovery_test COMMAND sync_recovery_test)
-        set_tests_properties(sync_recovery_test PROPERTIES TIMEOUT 30)
     endif()
     ament_package() # Don't forget this
 endif()

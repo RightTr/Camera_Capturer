@@ -6,7 +6,7 @@
 #include <sstream>
 #include <utility>
 
-#include "utils/common_utils.h"
+#include "sync/time_utils.h"
 
 RealSenseWriter::RealSenseWriter(std::string output_dir, bool save_images)
     : output_dir_(std::move(output_dir)),
