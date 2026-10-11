@@ -226,10 +226,7 @@ void realsense_consumer()
         StampedRealSenseFrame frame;
         if (!rs_prod->pop_rgbd(frame)) break;
         if (!output_enabled()) continue;
-        if (frame.has_depth && !rs_prod->process_rgbd(frame)) {
-            frame.color_image.release();
-            frame.depth_image_raw.release();
-        }
+        if (frame.has_depth) rs_prod->process_rgbd(frame);
         sensor_sync->onRGBD(std::move(frame));
         coordinator_cv.notify_one();
     }
@@ -439,6 +436,12 @@ int main(int argc, char **argv)
     if (!GuideProducer::start_serial_pair(guides, nullptr, nullptr)) {
         return EXIT_FAILURE;
     }
+    // External trigger mode is required by this node. Camera sync state can
+    // persist independently for the two devices across driver restarts, so
+    // configure both explicitly on every launch.
+    for (auto& guide : guides)
+        guide->send_serial_command(GuideProducer::SerialCmd::SYNC_ON);
+    std::cout << "[start] Guide external sync enabled on both cameras" << std::endl;
 
     std::atomic<bool> rs_ready(false);
     std::mutex rs_ready_mutex;

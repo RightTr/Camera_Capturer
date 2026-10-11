@@ -1,5 +1,6 @@
 #include "sync/sync_bridge.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
@@ -390,7 +391,8 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
             cv_.notify_all();
             return;
         }
-        trigger_event_queue_.push_back({output_ns, capture_ns});
+        trigger_event_queue_.push_back({
+            output_ns, capture_ns});
 
         cv_.notify_one();
     }
@@ -528,7 +530,8 @@ void SyncBridge::gpio_loop()
                 cv_.notify_all();
                 return;
             }
-            trigger_event_queue_.push_back({output_ns, capture_ns});
+            trigger_event_queue_.push_back({
+                output_ns, capture_ns});
 
             cv_.notify_one();
         }

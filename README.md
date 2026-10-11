@@ -211,9 +211,9 @@ ros2 launch camera_capturer camera_rgbdt.launch.py
 ros2 launch camera_capturer rgbdt_trigger.launch.py 
 ```
 
-Use this launch file (*rgbdt_trigger.launch.py*) when Guide stereo and RealSense RGBD are driven by the external PWM trigger board. The board timestamp serial port provides the PWM output time, and the GPIO line captures the PWM generation time on MCU.
+Use this launch file (*rgbdt_trigger.launch.py*) when Guide stereo and RealSense RGBD are driven by the external PWM trigger board. The board timestamp serial port provides the PWM output time, and the GPIO line captures the trigger on the host. The node enables external sync on both Guide cameras at startup and retries that command on a camera that stops producing frames.
 
-The two trigger nodes use different synchronization paths. `guidestereo_trigger_node` retains its existing timestamp matcher. `rgbdt_trigger_node` uses the board trigger as the camera slot clock: a thermal stereo pair, RGB, and depth assigned to slot `k` all receive its board output timestamp `T_k`.
+The two trigger nodes use different synchronization paths. `guidestereo_trigger_node` retains its existing timestamp matcher. `rgbdt_trigger_node` uses the board trigger as the camera slot clock: a thermal stereo pair, RGB, and depth assigned to slot `k` all receive the same timestamp `T_k`. Trigger output timestamps are used directly from the sync board clock; GPIO host timestamps are used only to match serial trigger events and do not shift the published timestamp.
 
 In `rgbdt_trigger_node`, Guide left/right frames are paired by V4L2 sensor timestamps. GPIO capture and host arrival times calibrate the initial slot only; `calibration_max_latency_ns` must be a measured upper bound smaller than one trigger period. Forward camera sequence gaps skip the missing trigger slots without recalibrating or clearing the IMU buffer. Missing trigger telemetry similarly preserves physical slot positions when the elapsed board time is an integral number of periods. The Guide producer passes every dequeued frame without software frame-rate throttling.
 
@@ -229,11 +229,11 @@ For Cyclone DDS receivers, also check `nstat -az UdpRcvbufErrors` before and aft
 sudo sysctl -w net.core.rmem_max=8388608 net.core.rmem_default=8388608
 ```
 
-This command changes the running system only; persistence across reboot requires a sysctl configuration managed by the operator. Validate the receiver's image and IMU header intervals, not just the driver's publication count. Air-VINS defaults to best-effort sensor subscriptions, so transport loss can still create a downstream gap independently of capture-side continuity.
+This command changes the running system only; persistence across reboot requires a sysctl configuration managed by the operator. Validate the receiver's image and IMU header intervals, not just the driver's publication count. The Scout Air-VINS launch uses reliable image subscriptions and a bounded image queue; other Air-VINS profiles may still use best-effort sensor subscriptions.
 
 When saving is enabled, a separate writer thread handles PNG and CSV output. A full writer queue or write failure stops the capture. `rgbdt_trigger.launch.py` always enables and publishes depth; this mode no longer offers `depth_stream_enable` or `depth_processing_enable` overrides. Independent accel and gyro ROS topics are not published by this trigger node; accepted raw samples remain available in its CSV files.
 
-In strict trigger mode, a short RealSense SDK callback queue buffers framesets before the producer consumes them. A genuine RGB or depth frame-number gap still stops output, and the log shows both previous and current frame numbers. The four camera image publishers use reliable ROS 2 QoS so reliable subscribers can connect.
+In strict trigger mode, a short RealSense SDK callback queue buffers framesets before the producer consumes them. RGB/depth frame-number gaps are logged without stopping the IMU timeline. If the RealSense align or filter block throws on one frameset, that RGB-D image is discarded while its depth hardware timestamp remains available as an IMU clock anchor. The four camera image publishers use reliable ROS 2 QoS so reliable subscribers can connect.
 
 The first 10 seconds after startup are a warm-up period. A continuous startup segment must be established within 10 seconds after warm-up; otherwise the node exits with an error.
 
