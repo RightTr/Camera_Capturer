@@ -48,6 +48,7 @@ private:
                               unsigned char expected_cmd);
     void handle_serial_frame(unsigned char cmd,
                              const std::vector<unsigned char>& payload);
+    void matchQueuedEventsLocked();
     Config config_;
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> pwm_count_{0};

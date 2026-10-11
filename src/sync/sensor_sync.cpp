@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 #include "sync/time_utils.h"
 
@@ -53,7 +54,9 @@ void SensorSync::resetPrerollLocked(const char* reason, std::int64_t host_now_ns
     epoch_start_host_ns_ = host_now_ns;
     triggers_.clear(); slots_.clear(); left_frames_.clear(); right_frames_.clear();
     pending_guide_pairs_.clear(); pending_rgbd_.clear(); accel_.clear(); gyro_.clear();
-    depth_anchors_.clear(); mapped_anchor_.reset(); last_imu_sensor_ns_ = {}; last_imu_arrived_at_ = {};
+    depth_anchors_.clear(); imu_mapping_anchor_.reset(); imu_clock_mapped_ = false;
+    imu_clock_scale_ = 1.0; imu_mapping_start_sensor_ns_ = 0;
+    last_imu_sensor_ns_ = {}; last_saved_imu_sensor_ns_ = {}; last_imu_arrived_at_ = {};
     imu_stream_fps_ = {}; thermal_slot_ = {}; rgbd_slot_ = {};
     last_right_sequence_ = 0; last_trigger_stamp_ = 0;
 }
@@ -66,7 +69,7 @@ void SensorSync::onTrigger(const TriggerEvent& event, std::int64_t host_now_ns)
         failLocked("Invalid hardware trigger timestamp"); return;
     }
     if (event.trigger_capture_unix_ns < epoch_start_host_ns_) return;
-    if (event.trigger_output_unix_ns <= last_accepted_trigger_stamp_) {
+    if (event.trigger_output_unix_ns <= last_trigger_stamp_) {
         resetPrerollLocked("Trigger clock moved backwards", host_now_ns, nullptr);
         return;
     }
@@ -82,7 +85,6 @@ void SensorSync::onTrigger(const TriggerEvent& event, std::int64_t host_now_ns)
         next_trigger_id_ += static_cast<std::uint64_t>(steps - 1);
     }
     last_trigger_stamp_ = event.trigger_output_unix_ns;
-    last_accepted_trigger_stamp_ = last_trigger_stamp_;
     SensorTrigger trigger{next_trigger_id_++, event.trigger_output_unix_ns,
                           event.trigger_capture_unix_ns};
     triggers_.push_back(trigger);
@@ -92,7 +94,6 @@ void SensorSync::onTrigger(const TriggerEvent& event, std::int64_t host_now_ns)
     if (triggers_.size() > kMaxTriggers) triggers_.pop_front();
     if (slots_.size() > kMaxSlots) {
         slots_.erase(slots_.begin());
-        ++stats_.dropped_image_slots;
     }
 }
 
@@ -147,7 +148,7 @@ void SensorSync::onIMU(StampedImuFrame frame, Clock::time_point now)
 
 std::optional<SensorTrigger> SensorSync::assignSlotLocked(
     std::uint64_t sequence, std::int64_t host_ns, StreamSlot& stream,
-    bool thermal, SensorSyncBatch& batch)
+    SensorSyncBatch& batch)
 {
     if (host_ns < epoch_start_host_ns_ + config_.trigger_period_ns) return std::nullopt;
     if (!stream.calibrated) {
@@ -156,8 +157,6 @@ std::optional<SensorTrigger> SensorSync::assignSlotLocked(
             if (it->capture_ns > host_ns) continue;
             if (host_ns - it->capture_ns > config_.calibration_max_latency_ns) return std::nullopt;
             stream = {true, it->id + 1, sequence};
-            batch.diagnostics.push_back(std::string("calibrated ") +
-                (thermal ? "thermal" : "RGB-D") + " at trigger " + std::to_string(it->id));
             return *it;
         }
         return std::nullopt;
@@ -206,7 +205,7 @@ void SensorSync::assignPendingFramesLocked(SensorSyncBatch& batch)
     for (auto it = pending_guide_pairs_.begin(); it != pending_guide_pairs_.end();) {
         const auto host_ns = std::max(guide_host_ns(it->left), guide_host_ns(it->right));
         const auto previous_epoch = epoch_;
-        auto trigger = assignSlotLocked(it->left.sequence, host_ns, thermal_slot_, true, batch);
+        auto trigger = assignSlotLocked(it->left.sequence, host_ns, thermal_slot_, batch);
         if (epoch_ != previous_epoch) return;
         if (!trigger) { ++it; continue; }
         if (trigger->stamp_ns == 0) { it = pending_guide_pairs_.erase(it); continue; }
@@ -219,8 +218,8 @@ void SensorSync::assignPendingFramesLocked(SensorSyncBatch& batch)
     }
     for (auto it = pending_rgbd_.begin(); it != pending_rgbd_.end();) {
         const auto previous_epoch = epoch_;
-        auto trigger = assignSlotLocked(it->depth_frame_number, color_host_ns(*it),
-                                        rgbd_slot_, false, batch);
+        auto trigger = assignSlotLocked(it->color_frame_number, color_host_ns(*it),
+                                        rgbd_slot_, batch);
         if (epoch_ != previous_epoch) return;
         if (!trigger) { ++it; continue; }
         if (trigger->stamp_ns == 0) { it = pending_rgbd_.erase(it); continue; }
@@ -234,12 +233,12 @@ void SensorSync::assignPendingFramesLocked(SensorSyncBatch& batch)
                                    system_time_ns_now(), &batch);
                 return;
             }
-            depth_anchors_.push_back({trigger->id, frame.depth_sensor_ns, trigger->stamp_ns});
-            if (depth_anchors_.size() > kMaxTriggers) {
-                resetPrerollLocked("Depth clock anchor queue overflow",
-                                   system_time_ns_now(), &batch);
-                return;
-            }
+            const auto previous_epoch = epoch_;
+            const ImuAnchor anchor{trigger->id, frame.depth_sensor_ns, trigger->stamp_ns};
+            depth_anchors_.push_back(anchor);
+            if (depth_anchors_.size() > 2) depth_anchors_.pop_front();
+            updateImuClockMappingLocked(anchor, batch);
+            if (epoch_ != previous_epoch || !fatal_error_.empty()) return;
         }
         if (!frame.color_image.empty() && !frame.depth_image_raw.empty()) {
             frame.trigger_unix_ns = trigger->stamp_ns;
@@ -250,110 +249,156 @@ void SensorSync::assignPendingFramesLocked(SensorSyncBatch& batch)
     }
 }
 
-std::int64_t SensorSync::mapImuTime(const ImuAnchor& first, const ImuAnchor& second,
-                                   std::uint64_t sensor_ns) const
+void SensorSync::updateImuClockMappingLocked(const ImuAnchor& anchor,
+                                             SensorSyncBatch& batch)
 {
-    const double fraction = static_cast<double>(sensor_ns - first.sensor_ns) /
-        static_cast<double>(second.sensor_ns - first.sensor_ns);
-    return first.trigger_ns + static_cast<std::int64_t>(
-        fraction * static_cast<double>(second.trigger_ns - first.trigger_ns));
-}
-
-void SensorSync::pruneImuBeforeLocked(std::uint64_t sensor_ns)
-{
-    std::optional<StampedImuFrame> keep;
-    for (const auto& frame : accel_) {
-        if (frame.sensor_ns > sensor_ns) break;
-        keep = frame;
+    if (depth_anchors_.size() == 1) {
+        imu_mapping_start_sensor_ns_ = anchor.sensor_ns;
+        imu_clock_scale_ = 1.0;
+        imu_mapping_anchor_ = anchor;
+        imu_clock_mapped_ = true;
+        while (!slots_.empty() && slots_.begin()->first <= anchor.frame_id)
+            slots_.erase(slots_.begin());
+        return;
     }
-    while (!accel_.empty() && accel_.front().sensor_ns < sensor_ns) accel_.pop_front();
-    if (keep && keep->sensor_ns < sensor_ns) accel_.push_front(std::move(*keep));
-    while (!gyro_.empty() && gyro_.front().sensor_ns < sensor_ns) gyro_.pop_front();
+
+    const auto& first = depth_anchors_[depth_anchors_.size() - 2];
+    const auto& second = depth_anchors_.back();
+    if (second.sensor_ns <= first.sensor_ns || second.trigger_ns <= first.trigger_ns) {
+        resetPrerollLocked("Depth clock anchor moved backwards",
+                           system_time_ns_now(), &batch);
+        return;
+    }
+
+    const double scale = static_cast<double>(second.trigger_ns - first.trigger_ns) /
+                         static_cast<double>(second.sensor_ns - first.sensor_ns);
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        resetPrerollLocked("Invalid depth clock mapping", system_time_ns_now(), &batch);
+        return;
+    }
+    imu_clock_scale_ = scale;
+    imu_mapping_anchor_ = second;
+    imu_clock_mapped_ = true;
 }
 
-bool SensorSync::mapIntervalLocked(const ImuAnchor& first, const ImuAnchor& second,
-                                   SensorSyncBatch& batch)
+std::optional<std::int64_t> SensorSync::mapImuTime(std::uint64_t sensor_ns) const
 {
-    if (second.sensor_ns <= first.sensor_ns || second.trigger_ns <= first.trigger_ns ||
-        last_imu_sensor_ns_[0] <= second.sensor_ns || last_imu_sensor_ns_[1] <= second.sensor_ns)
-        return false;
-    const auto max_accel_gap = static_cast<std::uint64_t>(3.0e9 / imu_stream_fps_[0]);
-    std::uint64_t dropped_here = 0;
-    for (const auto& gyro : gyro_) {
-        if (gyro.sensor_ns < first.sensor_ns || gyro.sensor_ns >= second.sensor_ns) continue;
-        const StampedImuFrame *before = nullptr, *after = nullptr;
-        for (const auto& accel : accel_) {
-            if (accel.sensor_ns <= gyro.sensor_ns) before = &accel;
-            if (accel.sensor_ns >= gyro.sensor_ns) { after = &accel; break; }
+    if (!imu_clock_mapped_ || !imu_mapping_anchor_) return std::nullopt;
+    const auto& anchor = *imu_mapping_anchor_;
+    const auto mapped = anchor.trigger_ns +
+        (static_cast<long double>(sensor_ns) - anchor.sensor_ns) * imu_clock_scale_;
+    if (mapped < std::numeric_limits<std::int64_t>::min() ||
+        mapped > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+        return std::nullopt;
+    return static_cast<std::int64_t>(std::llround(mapped));
+}
+
+void SensorSync::markImageCoverageLocked(std::int64_t stamp_ns)
+{
+    const auto next = std::upper_bound(triggers_.begin(), triggers_.end(), stamp_ns,
+        [](std::int64_t stamp, const SensorTrigger& trigger) {
+            return stamp < trigger.stamp_ns;
+        });
+    if (next == triggers_.begin()) return;
+    const auto current = std::prev(next);
+    if (stamp_ns <= current->stamp_ns) return;
+    const auto interval_end = next == triggers_.end()
+        ? current->stamp_ns + config_.trigger_period_ns
+        : next->stamp_ns;
+    if (stamp_ns >= interval_end) return;
+    const auto slot = slots_.find(current->id);
+    if (slot != slots_.end()) slot->second->imu_covered = true;
+}
+
+void SensorSync::collectImuWritesLocked(SensorSyncBatch& batch)
+{
+    if (!config_.save_imu || !imu_clock_mapped_) return;
+    for (int index = 0; index < 2; ++index) {
+        const auto& buffer = index == 0 ? accel_ : gyro_;
+        for (const auto& raw : buffer) {
+            if (raw.sensor_ns < imu_mapping_start_sensor_ns_ ||
+                raw.sensor_ns <= last_saved_imu_sensor_ns_[index]) continue;
+            const auto mapped = mapImuTime(raw.sensor_ns);
+            if (!mapped) {
+                failLocked("Mapped IMU timestamp is out of range", &batch);
+                return;
+            }
+            batch.imu_writes.push_back({raw, *mapped});
+            last_saved_imu_sensor_ns_[index] = raw.sensor_ns;
         }
-        if (!before || !after || after->sensor_ns - before->sensor_ns > max_accel_gap) {
+    }
+}
+
+void SensorSync::pruneImuLocked()
+{
+    if (accel_.size() < 2) return;
+    std::uint64_t preserve_before = gyro_.empty() ? accel_.back().sensor_ns
+                                                  : gyro_.front().sensor_ns;
+    auto after = std::lower_bound(accel_.begin(), accel_.end(), preserve_before,
+        [](const StampedImuFrame& frame, std::uint64_t stamp) {
+            return frame.sensor_ns < stamp;
+        });
+    if (after == accel_.begin()) return;
+    auto keep = std::prev(after);
+    accel_.erase(accel_.begin(), keep);
+}
+
+void SensorSync::mapReadyImuLocked(SensorSyncBatch& batch)
+{
+    if (!imu_clock_mapped_) return;
+    if (imu_stream_fps_[0] == 0 || imu_stream_fps_[1] == 0) {
+        collectImuWritesLocked(batch);
+        pruneImuLocked();
+        return;
+    }
+    while (!gyro_.empty()) {
+        const auto& gyro = gyro_.front();
+        if (gyro.sensor_ns < imu_mapping_start_sensor_ns_) {
+            gyro_.pop_front();
             ++stats_.dropped_gyro_samples;
-            ++dropped_here;
             continue;
         }
+        const auto after = std::lower_bound(accel_.begin(), accel_.end(), gyro.sensor_ns,
+            [](const StampedImuFrame& frame, std::uint64_t stamp) {
+                return frame.sensor_ns < stamp;
+            });
+        if (after == accel_.end()) break;
+        if (after == accel_.begin() && after->sensor_ns > gyro.sensor_ns) {
+            gyro_.pop_front();
+            ++stats_.dropped_gyro_samples;
+            continue;
+        }
+        const auto before = after->sensor_ns == gyro.sensor_ns ? after : std::prev(after);
         auto lerp = [&](float a, float b) {
             if (before->sensor_ns == after->sensor_ns) return a;
-            const double f = static_cast<double>(gyro.sensor_ns - before->sensor_ns) /
+            const double fraction = static_cast<double>(gyro.sensor_ns - before->sensor_ns) /
                 static_cast<double>(after->sensor_ns - before->sensor_ns);
-            return static_cast<float>(a + f * (b - a));
+            return static_cast<float>(a + fraction * (b - a));
         };
-        const auto stamp = mapImuTime(first, second, gyro.sensor_ns);
-        if (stamp <= last_published_imu_stamp_ || stamp < first.trigger_ns || stamp >= second.trigger_ns) {
+        const auto stamp = mapImuTime(gyro.sensor_ns);
+        if (!stamp) {
+            failLocked("Mapped IMU timestamp is out of range", &batch);
+            return;
+        }
+        if (*stamp <= last_published_imu_stamp_) {
             failLocked("Mapped IMU timestamp is not strictly increasing", &batch);
-            return true;
+            return;
         }
-        const auto previous_stamp = last_published_imu_stamp_;
-        if (previous_stamp &&
-            stamp - previous_stamp > static_cast<std::int64_t>(3.0e9 / imu_stream_fps_[1])) {
-            batch.diagnostics.emplace_back("[imu_sample_gap] large mapped gyro interval");
-        }
-        if (previous_stamp)
+        if (last_published_imu_stamp_)
             stats_.max_imu_dt_ns = std::max(stats_.max_imu_dt_ns,
-                                            stamp - previous_stamp);
-        batch.imu.push_back({stamp, lerp(before->x, after->x), lerp(before->y, after->y),
-                             lerp(before->z, after->z), gyro.x, gyro.y, gyro.z});
-        last_published_imu_stamp_ = stamp;
-        ++stats_.published_imu;
-    }
-    if (dropped_here) {
-        batch.diagnostics.push_back("[imu_sample_drop] trigger=" + std::to_string(first.frame_id) +
-            ".." + std::to_string(second.frame_id) + " gyro=" + std::to_string(dropped_here));
-    }
-    if (config_.save_imu) {
-        for (const auto* buffer : {&accel_, &gyro_}) {
-            for (const auto& raw : *buffer) {
-                if (raw.sensor_ns >= first.sensor_ns && raw.sensor_ns < second.sensor_ns)
-                    batch.imu_writes.push_back({raw, mapImuTime(first, second, raw.sensor_ns)});
-            }
-        }
-    }
-    pruneImuBeforeLocked(second.sensor_ns);
-    return true;
-}
+                                            *stamp - last_published_imu_stamp_);
 
-void SensorSync::dropUncoveredSlotsLocked(const ImuAnchor& first, const ImuAnchor& second,
-                                          std::size_t imu_begin, SensorSyncBatch& batch)
-{
-    for (auto it = slots_.lower_bound(first.frame_id);
-         it != slots_.end() && it->first < second.frame_id;) {
-        const auto stamp = it->second->trigger.stamp_ns;
-        auto next_stamp = stamp + config_.trigger_period_ns;
-        const auto next = std::find_if(triggers_.begin(), triggers_.end(), [&](const auto& trigger) {
-            return trigger.id == it->first + 1;
-        });
-        if (next != triggers_.end()) next_stamp = next->stamp_ns;
-        else if (it->first + 1 == second.frame_id) next_stamp = second.trigger_ns;
-        const bool covered = std::any_of(batch.imu.begin() + static_cast<std::ptrdiff_t>(imu_begin),
-            batch.imu.end(), [&](const auto& sample) {
-                return sample.stamp_ns > stamp && sample.stamp_ns < next_stamp;
-            });
-        if (covered) { ++it; continue; }
-        batch.diagnostics.push_back("[imu_image_drop] trigger=" + std::to_string(it->first) +
-                                    " reason=no mapped IMU in trigger interval");
-        it = slots_.erase(it);
-        ++stats_.dropped_image_slots;
-        ++stats_.uncovered_image_slots;
+        batch.imu.push_back({*stamp, lerp(before->x, after->x),
+                             lerp(before->y, after->y), lerp(before->z, after->z),
+                             gyro.x, gyro.y, gyro.z});
+        last_published_imu_stamp_ = *stamp;
+        ++stats_.published_imu;
+        markImageCoverageLocked(*stamp);
+        gyro_.pop_front();
     }
+
+    collectImuWritesLocked(batch);
+    pruneImuLocked();
 }
 
 SensorSyncBatch SensorSync::publishReady(Clock::time_point now)
@@ -364,63 +409,54 @@ SensorSyncBatch SensorSync::publishReady(Clock::time_point now)
     if (!begun_) return batch;
     assignPendingFramesLocked(batch);
     if (!fatal_error_.empty()) { batch.fatal_error = fatal_error_; return batch; }
-
-    if (!mapped_anchor_ && !depth_anchors_.empty()) {
-        mapped_anchor_ = depth_anchors_.front();
-        depth_anchors_.pop_front();
-        while (!slots_.empty() && slots_.begin()->first <= mapped_anchor_->frame_id)
-            slots_.erase(slots_.begin());
-    }
-    while (mapped_anchor_ && !depth_anchors_.empty()) {
-        const auto first = *mapped_anchor_;
-        const auto second = depth_anchors_.front();
-        if (second.sensor_ns <= first.sensor_ns || second.trigger_ns <= first.trigger_ns) {
-            resetPrerollLocked("Depth clock anchor moved backwards",
-                               system_time_ns_now(), &batch);
-            break;
-        }
-        const auto imu_begin = batch.imu.size();
-        if (!mapIntervalLocked(first, second, batch)) break;
-        dropUncoveredSlotsLocked(first, second, imu_begin, batch);
-        mapped_anchor_ = second;
-        depth_anchors_.pop_front();
-    }
+    mapReadyImuLocked(batch);
+    if (!fatal_error_.empty()) { batch.fatal_error = fatal_error_; return batch; }
     std::int64_t available_imu_stamp = last_published_imu_stamp_;
     for (auto it = slots_.begin(); it != slots_.end();) {
-        auto& pending = *it->second;
-        if (available_imu_stamp > pending.trigger.stamp_ns) {
+        auto& slot = *it->second;
+        const auto trigger_it = std::find_if(triggers_.begin(), triggers_.end(),
+            [&](const SensorTrigger& trigger) { return trigger.id == it->first; });
+        const auto next_trigger = trigger_it == triggers_.end()
+            ? triggers_.end() : std::next(trigger_it);
+        const auto interval_end = next_trigger == triggers_.end()
+            ? slot.trigger.stamp_ns + config_.trigger_period_ns
+            : next_trigger->stamp_ns;
+        if (slot.imu_covered && available_imu_stamp > slot.trigger.stamp_ns) {
             auto emit = std::make_shared<SensorImageSlot>();
-            emit->trigger = pending.trigger;
-            if (pending.left && pending.right && pending.trigger.stamp_ns > last_guide_stamp_) {
-                pending.left->trigger_unix_ns = pending.trigger.stamp_ns;
-                pending.right->trigger_unix_ns = pending.trigger.stamp_ns;
-                emit->left = std::move(pending.left);
-                emit->right = std::move(pending.right);
-                last_guide_stamp_ = pending.trigger.stamp_ns;
+            emit->trigger = slot.trigger;
+            if (slot.left && slot.right && slot.trigger.stamp_ns > last_guide_stamp_) {
+                slot.left->trigger_unix_ns = slot.trigger.stamp_ns;
+                slot.right->trigger_unix_ns = slot.trigger.stamp_ns;
+                emit->left = std::move(slot.left);
+                emit->right = std::move(slot.right);
+                last_guide_stamp_ = slot.trigger.stamp_ns;
                 ++stats_.published_guide_pairs;
             }
-            if (pending.rgbd && pending.trigger.stamp_ns > last_rgbd_stamp_) {
-                emit->rgbd = std::move(pending.rgbd);
-                last_rgbd_stamp_ = pending.trigger.stamp_ns;
+            if (slot.rgbd && slot.trigger.stamp_ns > last_rgbd_stamp_) {
+                emit->rgbd = std::move(slot.rgbd);
+                last_rgbd_stamp_ = slot.trigger.stamp_ns;
                 ++stats_.published_rgbd_pairs;
             }
             if (emit->left || emit->rgbd) {
                 batch.images.push_back(std::move(emit));
             }
-            if (!pending.left && !pending.right && !pending.rgbd) {
+            if (!slot.left && !slot.right && !slot.rgbd) {
                 it = slots_.erase(it);
                 continue;
             }
             // Each image group is emitted once; clear any group that was not
             // emitted because its stream timestamp had already advanced.
-            if (pending.trigger.stamp_ns <= last_guide_stamp_) {
-                pending.left.reset(); pending.right.reset();
+            if (slot.trigger.stamp_ns <= last_guide_stamp_) {
+                slot.left.reset(); slot.right.reset();
             }
-            if (pending.trigger.stamp_ns <= last_rgbd_stamp_) pending.rgbd.reset();
+            if (slot.trigger.stamp_ns <= last_rgbd_stamp_) slot.rgbd.reset();
         }
-        if (now - pending.created > std::chrono::nanoseconds(3 * config_.trigger_period_ns)) {
+        if (!slot.imu_covered && available_imu_stamp >= interval_end) {
             it = slots_.erase(it);
-            ++stats_.dropped_image_slots;
+            continue;
+        }
+        if (now - slot.created > std::chrono::nanoseconds(3 * config_.trigger_period_ns)) {
+            it = slots_.erase(it);
         } else ++it;
     }
 

@@ -7,8 +7,6 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -26,8 +24,7 @@
 #include "sync/sensor_sync.h"
 #include "sync/time_utils.h"
 #include "utils/ros_utils.h"
-#include "writer/guide_writer.h"
-#include "writer/realsense_writer.h"
+#include "writer/sensor_writer.h"
 
 using ImagePublisher = Publisher<ImageMsg>;
 using ImuPublisher = Publisher<ImuMsg>;
@@ -43,9 +40,7 @@ std::atomic<bool> fatalFlag(false);
 std::atomic<bool> g_output_started(false);
 SteadyClock::time_point g_output_start_at;
 std::string outputdir;
-std::unique_ptr<GuideWriter> guide_writers[2];
-std::unique_ptr<RealSenseWriter> rs_writer;
-std::ofstream time_stream;
+std::unique_ptr<SensorWriter> sensor_writer;
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
 std::unique_ptr<SyncBridge> sync_bridge;
@@ -58,128 +53,20 @@ ImagePublisher g_rs_depth_pub;
 TemperaturePublisher g_rs_temp_pub;
 ImuPublisher g_rs_imu_pub;
 
-struct WriteJob {
-    enum class Kind { slot, imu, temperature } kind;
-    std::shared_ptr<SensorImageSlot> slot;
-    StampedImuFrame imu{};
-    std::int64_t mapped_ns = 0;
-    int camera_id = 0;
-    GuideTemperature temperature{};
-};
-
 std::mutex coordinator_mutex;
 std::condition_variable coordinator_cv;
 std::int64_t trigger_period_ns = 33333333;
 std::int64_t trigger_tolerance_ns = 5000000;
 std::int64_t stereo_pair_tolerance_ns = 10000000;
 std::int64_t calibration_max_latency_ns = 25000000;
-std::mutex writer_mutex;
-std::condition_variable writer_cv;
-std::deque<WriteJob> writer_jobs;
-std::size_t writer_capacity = 2048;
-
-void request_stop(const char* reason)
+void request_stop(const char* reason, bool fatal = false)
 {
+    if (fatal) fatalFlag.store(true);
     if (!quitFlag.exchange(true)) std::cerr << "[STOP] " << reason << std::endl;
     coordinator_cv.notify_all();
-    writer_cv.notify_all();
-}
-void fatal_stop(const char* reason)
-{
-    fatalFlag.store(true);
-    request_stop(reason);
-}
-void stop_capture_quietly()
-{
-    quitFlag.store(true);
-    coordinator_cv.notify_all();
-    writer_cv.notify_all();
 }
 bool output_enabled() { return g_output_started.load(std::memory_order_acquire); }
-bool enqueue_write(WriteJob job);
-bool enqueue_write(WriteJob job)
-{
-    if (!if_save) return true;
-    std::lock_guard<std::mutex> lock(writer_mutex);
-    if (writer_jobs.size() >= writer_capacity) {
-        fatal_stop("Recording queue overflow");
-        return false;
-    }
-    writer_jobs.push_back(std::move(job));
-    writer_cv.notify_one();
-    return true;
-}
-void write_diag(const SensorTrigger& trigger, const char* source, std::int64_t sensor_ns)
-{
-    time_stream << trigger.id << ',' << format_timestamp_ns(trigger.stamp_ns)
-                << ',' << source << ',' << format_timestamp_ns(sensor_ns) << '\n';
-}
-void writer_loop()
-{
-    while (true) {
-        WriteJob job;
-        {
-            std::unique_lock<std::mutex> lock(writer_mutex);
-            writer_cv.wait(lock, [&] { return quitFlag.load() || !writer_jobs.empty(); });
-            if (writer_jobs.empty()) break;
-            job = std::move(writer_jobs.front());
-            writer_jobs.pop_front();
-        }
-        try {
-            bool good = true;
-            if (job.kind == WriteJob::Kind::slot) {
-                const auto& slot = *job.slot;
-                if (slot.left && slot.right) {
-                    good = guide_writers[0]->write(*slot.left) && guide_writers[1]->write(*slot.right);
-                    write_diag(slot.trigger, "thermal_left", to_ns_from_sec_usec(
-                        slot.left->sensor_sec, slot.left->sensor_microsec));
-                    write_diag(slot.trigger, "thermal_right", to_ns_from_sec_usec(
-                        slot.right->sensor_sec, slot.right->sensor_microsec));
-                }
-                if (slot.rgbd) {
-                    good = rs_writer->write_rgbd(*slot.rgbd) && good;
-                    write_diag(slot.trigger, "rgb", to_ns_from_sec_usec(
-                        slot.rgbd->color_sensor_sec, slot.rgbd->color_sensor_microsec));
-                    write_diag(slot.trigger, "depth", static_cast<std::int64_t>(slot.rgbd->depth_sensor_ns));
-                }
-                time_stream.flush();
-                good = good && time_stream.good();
-            } else if (job.kind == WriteJob::Kind::imu) {
-                good = rs_writer->write_imu(job.imu, job.mapped_ns);
-            } else {
-                good = guide_writers[job.camera_id]->write_camera_temperature(job.temperature);
-            }
-            if (!good) { fatal_stop("Recording write failed"); break; }
-        } catch (const std::exception& e) {
-            std::cerr << "[recording] " << e.what() << std::endl;
-            fatal_stop("Recording write failed");
-            break;
-        }
-    }
-}
-bool open_writers(const std::string& base_dir, bool save_images)
-{
-    for (int i = 0; i < 2; ++i) {
-        guide_writers[i] = std::make_unique<GuideWriter>(
-            base_dir, GuideProducer::camera_name(i), save_images);
-        if (!guide_writers[i]->open()) return false;
-    }
-    time_stream.open(base_dir + "/times.csv");
-    if (!time_stream.is_open()) return false;
-    time_stream << "trigger_id,trigger_time,source,sensor_time\n";
-    time_stream.flush();
-    rs_writer = std::make_unique<RealSenseWriter>(base_dir, save_images);
-    return time_stream.good() && rs_writer->open();
-}
-void stop_components()
-{
-    if (sync_bridge) sync_bridge->stop();
-    if (rs_prod) rs_prod->stop();
-    for (auto& guide : guides) if (guide) guide->stop();
-    coordinator_cv.notify_all();
-    writer_cv.notify_all();
-}
-void signal_handler(int) { request_stop("Signal received"); }
+void signal_handler(int) { quitFlag.store(true); }
 bool wait_realsense_ready(std::atomic<bool>& ready, std::mutex& mutex, std::condition_variable& cv)
 {
     std::unique_lock<std::mutex> lock(mutex);
@@ -192,7 +79,7 @@ void trigger_loop()
         const TriggerEvent event = sync_bridge->take_trigger_event();
         if (quitFlag.load()) break;
         if (event.trigger_output_unix_ns <= 0 || event.trigger_capture_unix_ns <= 0) {
-            fatal_stop("SyncBridge returned an invalid trigger");
+            request_stop("SyncBridge returned an invalid trigger", true);
             break;
         }
         const auto now = SteadyClock::now();
@@ -205,7 +92,7 @@ void trigger_loop()
         sensor_sync->onTrigger(event, system_time_ns_now());
         coordinator_cv.notify_one();
     }
-    if (!quitFlag.load()) fatal_stop("Trigger loop stopped");
+    if (!quitFlag.load()) request_stop("Trigger loop stopped", true);
 }
 
 void guide_consumer(int cam_id)
@@ -217,7 +104,7 @@ void guide_consumer(int cam_id)
         sensor_sync->onThermal(std::move(frame));
         coordinator_cv.notify_one();
     }
-    if (!quitFlag.load()) fatal_stop("Guide image consumer stopped");
+    if (!quitFlag.load()) request_stop("Guide image consumer stopped", true);
 }
 
 void realsense_consumer()
@@ -230,7 +117,7 @@ void realsense_consumer()
         sensor_sync->onRGBD(std::move(frame));
         coordinator_cv.notify_one();
     }
-    if (!quitFlag.load()) fatal_stop("RealSense consumer stopped");
+    if (!quitFlag.load()) request_stop("RealSense consumer stopped", true);
 }
 
 void guide_temperature_consumer(int cam_id)
@@ -244,13 +131,11 @@ void guide_temperature_consumer(int cam_id)
             make_time_ns(static_cast<std::uint64_t>(temperature.host_unix_ns)),
             temperature.temperature);
         if (if_save) {
-            WriteJob job{WriteJob::Kind::temperature};
-            job.camera_id = cam_id;
-            job.temperature = temperature;
-            enqueue_write(std::move(job));
+            if (!sensor_writer->enqueue_temperature(cam_id, temperature))
+                request_stop("Recording queue overflow", true);
         }
     }
-    if (!quitFlag.load()) fatal_stop("Guide temperature consumer stopped");
+    if (!quitFlag.load()) request_stop("Guide temperature consumer stopped", true);
 }
 
 void imu_consumer()
@@ -262,26 +147,26 @@ void imu_consumer()
         sensor_sync->onIMU(std::move(frame), SteadyClock::now());
         coordinator_cv.notify_one();
     }
-    if (!quitFlag.load()) fatal_stop("IMU consumer stopped");
+    if (!quitFlag.load()) request_stop("IMU consumer stopped", true);
 }
 
-void publish_slot(const SensorImageSlot& slot)
+void publish_image_group(const SensorImageSlot& image_group)
 {
-    const auto stamp = make_time_ns(static_cast<std::uint64_t>(slot.trigger.stamp_ns));
-    if (slot.left && slot.right) {
-        publish_image(g_guide_image_pubs[0], slot.left->gray_image, "mono8", "guide_left", stamp);
-        publish_image(g_guide_image_pubs[1], slot.right->gray_image, "mono8", "guide_right", stamp);
+    const auto stamp = make_time_ns(static_cast<std::uint64_t>(image_group.trigger.stamp_ns));
+    if (image_group.left && image_group.right) {
+        publish_image(g_guide_image_pubs[0], image_group.left->gray_image, "mono8", "guide_left", stamp);
+        publish_image(g_guide_image_pubs[1], image_group.right->gray_image, "mono8", "guide_right", stamp);
         if (g_enable_guide_temperature) {
-            publish_image(g_guide_temp_pubs[0], slot.left->temperature_celsius,
+            publish_image(g_guide_temp_pubs[0], image_group.left->temperature_celsius,
                           "32FC1", "guide_left", stamp);
-            publish_image(g_guide_temp_pubs[1], slot.right->temperature_celsius,
+            publish_image(g_guide_temp_pubs[1], image_group.right->temperature_celsius,
                           "32FC1", "guide_right", stamp);
         }
     }
-    if (slot.rgbd) {
-        publish_image(g_rs_rgb_pub, slot.rgbd->color_image, "bgr8", "realsense_color", stamp);
-        publish_image(g_rs_depth_pub, slot.rgbd->depth_image_raw, "16UC1", "realsense_depth", stamp);
-        publish_temperature(g_rs_temp_pub, "realsense", stamp, slot.rgbd->temperature_celsius);
+    if (image_group.rgbd) {
+        publish_image(g_rs_rgb_pub, image_group.rgbd->color_image, "bgr8", "realsense_color", stamp);
+        publish_image(g_rs_depth_pub, image_group.rgbd->depth_image_raw, "16UC1", "realsense_depth", stamp);
+        publish_temperature(g_rs_temp_pub, "realsense", stamp, image_group.rgbd->temperature_celsius);
     }
 }
 
@@ -296,10 +181,9 @@ void coordinator_loop()
         SensorSyncBatch batch = sensor_sync->publishReady(SteadyClock::now());
         if (!batch.fatal_error.empty()) {
             std::cerr << "[sync] capture stopped: " << batch.fatal_error << std::endl;
-            fatal_stop(batch.fatal_error.c_str());
+            request_stop(batch.fatal_error.c_str(), true);
             break;
         }
-        for (const auto& message : batch.diagnostics) std::cerr << message << std::endl;
         for (const auto& sample : batch.imu) {
             ImuMsg msg;
             msg.header.frame_id = "realsense_imu";
@@ -315,19 +199,19 @@ void coordinator_loop()
             msg.angular_velocity.z = sample.gz;
             publish(g_rs_imu_pub, msg);
         }
-        for (const auto& raw : batch.imu_writes) {
-            WriteJob job{WriteJob::Kind::imu};
-            job.imu = raw.frame;
-            job.mapped_ns = raw.mapped_ns;
-            if (!enqueue_write(std::move(job))) break;
-        }
-        for (const auto& slot : batch.images) {
-            if (if_save) {
-                WriteJob job{WriteJob::Kind::slot};
-                job.slot = slot;
-                if (!enqueue_write(std::move(job))) break;
+        for (const auto& raw : batch.imu_writes)
+            if (!sensor_writer->enqueue_imu(raw.frame, raw.mapped_ns)) {
+                request_stop("Recording queue overflow", true);
+                break;
             }
-            publish_slot(*slot);
+        for (const auto& image_group : batch.images) {
+            if (if_save) {
+                if (!sensor_writer->enqueue_image_group(image_group)) {
+                    request_stop("Recording queue overflow", true);
+                    break;
+                }
+            }
+            publish_image_group(*image_group);
         }
     }
 }
@@ -347,7 +231,6 @@ int main(int argc, char **argv)
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
-    writer_capacity = static_cast<std::size_t>(imu_queue_size) + 128;
     if (imu_fps <= 0 || imu_queue_size <= 0) {
         std::cerr << "Invalid IMU timing or queue parameters" << std::endl;
         return EXIT_FAILURE;
@@ -383,11 +266,11 @@ int main(int argc, char **argv)
     g_enable_guide_temperature = get_param<bool>("enable_guide_temperature", true);
     const bool depth_stream_enable = get_param<bool>("depth_stream_enable", true);
     if (!depth_stream_enable) {
-        std::cerr << "VIO trigger mode requires depth_stream_enable=true" << std::endl;
+        std::cerr << "RGB-D trigger mode requires depth_stream_enable=true" << std::endl;
         return EXIT_FAILURE;
     }
     if (!get_param<bool>("depth_processing_enable", true)) {
-        std::cerr << "VIO trigger mode requires depth_processing_enable=true" << std::endl;
+        std::cerr << "RGB-D trigger mode requires depth_processing_enable=true" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -411,7 +294,11 @@ int main(int argc, char **argv)
             }
         });
 
-    if (if_save && !open_writers(outputdir, if_save_img != 0)) {
+    sensor_writer = std::make_unique<SensorWriter>(outputdir, if_save_img != 0,
+        static_cast<std::size_t>(imu_queue_size) + 128,
+        [](const char* reason) { request_stop(reason, true); });
+    if (if_save && !sensor_writer->open()) {
+        std::cerr << "Failed to open recording files" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -424,7 +311,7 @@ int main(int argc, char **argv)
             dev_left,
             dev_right,
             [] { return !quitFlag.load(); },
-            [] { fatal_stop("Guide producer failed"); })) {
+            [] { request_stop("Guide producer failed", true); })) {
         return EXIT_FAILURE;
     }
     for (auto& guide : guides) {
@@ -451,18 +338,18 @@ int main(int argc, char **argv)
         dev_rs,
         [] { return !quitFlag.load(); },
         [&] {
-            fatal_stop("RealSense producer failed");
+            request_stop("RealSense producer failed", true);
             rs_ready_cv.notify_all();
         },
         [&](const rs2::pipeline_profile& profile) {
-            if (if_save && !rs_writer->write_intrinsics(profile))
-                fatal_stop("Recording intrinsics failed");
+            if (if_save && !sensor_writer->write_intrinsics(profile))
+                request_stop("Recording intrinsics failed", true);
             rs_ready.store(true, std::memory_order_relaxed);
             rs_ready_cv.notify_all();
         },
         [](double scale) {
-            if (if_save && !rs_writer->write_depth_scale(scale))
-                fatal_stop("Recording depth scale failed");
+            if (if_save && !sensor_writer->write_depth_scale(scale))
+                request_stop("Recording depth scale failed", true);
         });
     rs_prod->set_sync_mode(rs_sync_mode);
     rs_prod->set_imu_fps(imu_fps);
@@ -477,7 +364,9 @@ int main(int argc, char **argv)
 
     if (!wait_realsense_ready(rs_ready, rs_ready_mutex, rs_ready_cv)) {
         request_stop("RealSense startup timeout");
-        stop_components();
+        if (sync_bridge) sync_bridge->stop();
+        if (rs_prod) rs_prod->stop();
+        for (auto& guide : guides) if (guide) guide->stop();
         for (auto& t : producers) {
             if (t.joinable()) t.join();
         }
@@ -493,15 +382,16 @@ int main(int argc, char **argv)
     sync_bridge = std::make_unique<SyncBridge>(sync_config);
     if (!sync_bridge->start()) {
         request_stop("SyncBridge start failed");
-        stop_components();
+        if (sync_bridge) sync_bridge->stop();
+        if (rs_prod) rs_prod->stop();
+        for (auto& guide : guides) if (guide) guide->stop();
         for (auto& t : producers) {
             if (t.joinable()) t.join();
         }
         return EXIT_FAILURE;
     }
     g_output_start_at = SteadyClock::now() + std::chrono::seconds(std::max(0, warmup));
-    std::thread writer_thread;
-    if (if_save) writer_thread = std::thread(writer_loop);
+    if (if_save) sensor_writer->start();
 
     std::vector<std::thread> consumers;
     consumers.emplace_back(trigger_loop);
@@ -515,14 +405,16 @@ int main(int argc, char **argv)
 
     if (!GuideProducer::start_capture_pair(guides)) {
         request_stop("Guide capture start failed");
-        stop_components();
+        if (sync_bridge) sync_bridge->stop();
+        if (rs_prod) rs_prod->stop();
+        for (auto& guide : guides) if (guide) guide->stop();
         for (auto& t : producers) {
             if (t.joinable()) t.join();
         }
         for (auto& t : consumers) {
             if (t.joinable()) t.join();
         }
-        if (writer_thread.joinable()) writer_thread.join();
+        sensor_writer->stop();
         return EXIT_FAILURE;
     }
     std::cout << "[start] Guide left/right ready" << std::endl;
@@ -537,25 +429,22 @@ int main(int argc, char **argv)
         rate.sleep();
     }
 
-    stop_capture_quietly();
-    stop_components();
+    quitFlag.store(true);
+    coordinator_cv.notify_all();
+    if (sync_bridge) sync_bridge->stop();
+    if (rs_prod) rs_prod->stop();
+    for (auto& guide : guides) if (guide) guide->stop();
 
     for (auto& t : producers) t.join();
     for (auto& t : consumers) t.join();
-    if (writer_thread.joinable()) writer_thread.join();
-
-    if (time_stream.is_open()) {
-        time_stream.flush();
-    }
+    sensor_writer->stop();
 
     const auto stats = sensor_sync->stats();
     std::cerr << "[sync_continuity] imu=" << stats.published_imu
               << " max_imu_dt_ms=" << stats.max_imu_dt_ns / 1.0e6
               << " dropped_gyro_samples=" << stats.dropped_gyro_samples
-              << " uncovered_image_slots=" << stats.uncovered_image_slots
               << " guide_pairs=" << stats.published_guide_pairs
-              << " rgbd_pairs=" << stats.published_rgbd_pairs
-              << " incomplete_image_slots=" << stats.dropped_image_slots << std::endl;
+              << " rgbd_pairs=" << stats.published_rgbd_pairs << std::endl;
     shutdown();
     return fatalFlag.load() ? EXIT_FAILURE : EXIT_SUCCESS;
 }

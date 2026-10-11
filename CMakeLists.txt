@@ -127,7 +127,8 @@ if(USE_ROS1)
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
-        src/writer/realsense_writer.cpp)
+        src/writer/realsense_writer.cpp
+        src/writer/sensor_writer.cpp)
     target_link_libraries(guidestereo_node
         ${catkin_LIBRARIES}
         pthread
@@ -212,7 +213,8 @@ if(USE_ROS2)
         src/producer/guide_producer.cpp
         src/producer/realsense_producer.cpp
         src/writer/guide_writer.cpp
-        src/writer/realsense_writer.cpp)
+        src/writer/realsense_writer.cpp
+        src/writer/sensor_writer.cpp)
     ament_target_dependencies(guidestereo_node
         rclcpp
         sensor_msgs
