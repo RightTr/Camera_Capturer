@@ -45,7 +45,8 @@ private:
     void gpio_loop();
     bool send_control_request(unsigned char cmd,
                               const std::vector<unsigned char>& payload,
-                              unsigned char expected_cmd);
+                              unsigned char expected_cmd,
+                              std::vector<unsigned char>* response = nullptr);
     void handle_serial_frame(unsigned char cmd,
                              const std::vector<unsigned char>& payload);
     void matchQueuedEventsLocked();

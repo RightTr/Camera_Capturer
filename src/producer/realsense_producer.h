@@ -42,6 +42,7 @@ struct StampedImuFrame {
     float x, y, z;
     std::uint64_t frame_number = 0;
     std::uint32_t fps = 0;
+    std::int64_t mapped_ns = 0;
 };
 
 class RealSenseProducer {

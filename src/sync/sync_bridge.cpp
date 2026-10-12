@@ -63,8 +63,11 @@ constexpr unsigned char kRxFrameHead1 = 0xFE;
 constexpr unsigned char kTxFrameHead0 = 0xEE;
 constexpr unsigned char kTxFrameHead1 = 0xFE;
 constexpr unsigned char kSetMasterStreamCmd = 0x0C;
+constexpr unsigned char kGetRuntimeCmd = 0x08;
+constexpr unsigned char kRuntimeCmd = 0x83;
 constexpr unsigned char kMasterTriggerCmd = 0x86;
 constexpr unsigned char kMasterTriggerPayloadLen = 0x0C;
+constexpr std::size_t kRuntimePayloadLen = 19;
 constexpr unsigned char kFrameTail0 = 0xAA;
 constexpr unsigned char kFrameTail1 = 0xDD;
 constexpr int kControlReadTimeoutMs = 150;
@@ -116,6 +119,22 @@ bool SyncBridge::start()
         return false;
     }
 
+    std::vector<unsigned char> runtime;
+    if (!send_control_request(kGetRuntimeCmd, {}, kRuntimeCmd, &runtime) ||
+        runtime.size() != kRuntimePayloadLen || runtime[2] == 0) {
+        if (runtime.size() == kRuntimePayloadLen && runtime[2] == 0) {
+            std::fprintf(stderr,
+                         "Sync-board clock is uninitialized (utc_valid=0); the board will not send trigger timestamps\n");
+        } else {
+            std::fprintf(stderr, "Failed to read sync-board runtime state\n");
+        }
+        serial_->Close();
+        delete serial_;
+        serial_ = nullptr;
+        running_.store(false);
+        return false;
+    }
+
     if (!send_control_request(
             kSetMasterStreamCmd,
             {1},
@@ -158,7 +177,10 @@ bool SyncBridge::start()
 
 void SyncBridge::stop()
 {
-    if (!running_.exchange(false)) {
+    running_.store(false);
+    const bool had_resources = serial_ || gpio_line_ ||
+                               serial_worker_.joinable() || gpio_worker_.joinable();
+    if (!had_resources) {
         return;
     }
 
@@ -246,7 +268,8 @@ void SyncBridge::clear()
 
 bool SyncBridge::send_control_request(unsigned char cmd,
                                       const std::vector<unsigned char>& payload,
-                                      unsigned char expected_cmd)
+                                      unsigned char expected_cmd,
+                                      std::vector<unsigned char>* response)
 {
     if (!serial_ || !serial_->IsOpen()) {
         std::fprintf(stderr, "Cannot send sync-board command: serial is not open\n");
@@ -334,7 +357,9 @@ bool SyncBridge::send_control_request(unsigned char cmd,
                         break;
                     }
                     if (response_cmd == expected_cmd) {
-                        std::printf("Sync-board command 0x%02X acknowledged\n", cmd);
+                        if (response) *response = response_payload;
+                        if (cmd == kSetMasterStreamCmd)
+                            std::printf("Sync-board command 0x%02X acknowledged\n", cmd);
                         return true;
                     }
                 }
@@ -420,6 +445,8 @@ void SyncBridge::serial_loop()
                 continue;
             }
             std::fprintf(stderr, "Time serial read error: %s\n", e.what());
+            running_.store(false, std::memory_order_relaxed);
+            cv_.notify_all();
             break;
         }
 

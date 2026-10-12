@@ -25,7 +25,6 @@ struct SensorTrigger {
 struct SensorSyncConfig {
     std::int64_t trigger_period_ns = 33333333;
     std::int64_t trigger_tolerance_ns = 5000000;
-    std::int64_t stereo_pair_tolerance_ns = 10000000;
     std::int64_t calibration_max_latency_ns = 25000000;
     int imu_queue_size = 2000;
     bool save_imu = false;
@@ -46,14 +45,9 @@ struct SensorImuSample {
     float gx = 0, gy = 0, gz = 0;
 };
 
-struct SensorImuWrite {
-    StampedImuFrame frame{};
-    std::int64_t mapped_ns = 0;
-};
-
 struct SensorSyncBatch {
     std::vector<SensorImuSample> imu;
-    std::vector<SensorImuWrite> imu_writes;
+    std::vector<StampedImuFrame> imu_writes;
     std::vector<std::shared_ptr<SensorImageSlot>> images;
     std::string fatal_error;
 };
@@ -86,23 +80,15 @@ private:
         std::uint64_t last_sequence = 0;
     };
     struct ImuAnchor {
-        std::uint64_t frame_id = 0;
         std::uint64_t sensor_ns = 0;
         std::int64_t trigger_ns = 0;
     };
-    struct GuidePair {
-        GuideFrame left;
-        GuideFrame right;
-    };
-
     void resetPrerollLocked(const char* reason, std::int64_t host_now_ns,
                             SensorSyncBatch* batch);
     void failLocked(const char* reason, SensorSyncBatch* batch = nullptr);
     std::optional<SensorTrigger> assignSlotLocked(std::uint64_t sequence,
-        std::int64_t host_ns, StreamSlot& stream, SensorSyncBatch& batch);
-    void pairThermalLocked(SensorSyncBatch& batch);
-    void assignPendingFramesLocked(SensorSyncBatch& batch);
-    void updateImuClockMappingLocked(const ImuAnchor& anchor, SensorSyncBatch& batch);
+        std::int64_t host_ns, StreamSlot& stream);
+    void assignPendingFramesLocked();
     void mapReadyImuLocked(SensorSyncBatch& batch);
     void pruneImuLocked();
     void collectImuWritesLocked(SensorSyncBatch& batch);
@@ -120,22 +106,25 @@ private:
     std::map<std::uint64_t, std::shared_ptr<SensorImageSlot>> slots_;
     std::deque<GuideFrame> left_frames_;
     std::deque<GuideFrame> right_frames_;
-    std::deque<GuidePair> pending_guide_pairs_;
     std::deque<StampedRealSenseFrame> pending_rgbd_;
     std::deque<StampedImuFrame> accel_;
     std::deque<StampedImuFrame> gyro_;
-    std::deque<ImuAnchor> depth_anchors_;
     std::optional<ImuAnchor> imu_mapping_anchor_;
     bool imu_clock_mapped_ = false;
-    double imu_clock_scale_ = 1.0;
+    bool board_host_offset_valid_ = false;
+    std::int64_t board_host_offset_ns_ = 0;
+    bool imu_phase_calibrated_ = false;
+    long double imu_phase_bias_ns_ = 0.0L;
+    long double imu_mapping_correction_ns_ = 0.0L;
     std::uint64_t imu_mapping_start_sensor_ns_ = 0;
     std::array<std::uint64_t, 2> last_imu_sensor_ns_{};
+    std::array<std::uint64_t, 2> last_imu_raw_sensor_ns_{};
+    std::array<std::uint64_t, 2> imu_wrap_offset_ns_{};
     std::array<std::uint64_t, 2> last_saved_imu_sensor_ns_{};
     std::array<Clock::time_point, 2> last_imu_arrived_at_{};
     std::array<std::uint32_t, 2> imu_stream_fps_{};
-    StreamSlot thermal_slot_;
+    std::array<StreamSlot, 2> thermal_slots_{};
     StreamSlot rgbd_slot_;
-    std::uint64_t last_right_sequence_ = 0;
     std::uint64_t next_trigger_id_ = 0;
     std::int64_t last_trigger_stamp_ = 0;
     std::int64_t last_published_imu_stamp_ = 0;

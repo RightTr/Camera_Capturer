@@ -23,7 +23,6 @@ def generate_launch_description():
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     trigger_frequency = LaunchConfiguration("trigger_frequency")
     trigger_tolerance_ns = LaunchConfiguration("trigger_tolerance_ns")
-    stereo_pair_tolerance_ns = LaunchConfiguration("stereo_pair_tolerance_ns")
     calibration_max_latency_ns = LaunchConfiguration("calibration_max_latency_ns")
     enable_guide_temperature = LaunchConfiguration("enable_guide_temperature")
     use_rviz = LaunchConfiguration("use_rviz")
@@ -74,7 +73,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "serial_port",
-            default_value="/dev/ttyUSB0",
+            default_value="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
             description="Serial port that receives board-provided PWM edge Unix timestamps in ns.",
         ),
         DeclareLaunchArgument(
@@ -101,11 +100,6 @@ def generate_launch_description():
             "trigger_tolerance_ns",
             default_value="5000000",
             description="Allowed trigger period error in nanoseconds.",
-        ),
-        DeclareLaunchArgument(
-            "stereo_pair_tolerance_ns",
-            default_value="10000000",
-            description="Maximum left/right V4L2 sensor timestamp difference in nanoseconds.",
         ),
         DeclareLaunchArgument(
             "calibration_max_latency_ns",
@@ -142,7 +136,6 @@ def generate_launch_description():
                 "sync_queue_size": sync_queue_size,
                 "trigger_frequency": trigger_frequency,
                 "trigger_tolerance_ns": trigger_tolerance_ns,
-                "stereo_pair_tolerance_ns": stereo_pair_tolerance_ns,
                 "calibration_max_latency_ns": calibration_max_latency_ns,
                 "enable_guide_temperature": ParameterValue(enable_guide_temperature, value_type=bool),
             }],

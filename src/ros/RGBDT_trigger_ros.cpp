@@ -57,7 +57,6 @@ std::mutex coordinator_mutex;
 std::condition_variable coordinator_cv;
 std::int64_t trigger_period_ns = 33333333;
 std::int64_t trigger_tolerance_ns = 5000000;
-std::int64_t stereo_pair_tolerance_ns = 10000000;
 std::int64_t calibration_max_latency_ns = 25000000;
 void request_stop(const char* reason, bool fatal = false)
 {
@@ -109,11 +108,30 @@ void guide_consumer(int cam_id)
 
 void realsense_consumer()
 {
+    std::uint64_t rgbd_processing_errors = 0;
+    const auto log_processing_error = [&](const char* message) {
+        ++rgbd_processing_errors;
+        if (rgbd_processing_errors == 1 || rgbd_processing_errors % 100 == 0)
+            std::cerr << "[realsense] RGB-D processing failed (count="
+                      << rgbd_processing_errors << "): " << message << std::endl;
+    };
     while (!quitFlag.load()) {
         StampedRealSenseFrame frame;
         if (!rs_prod->pop_rgbd(frame)) break;
         if (!output_enabled()) continue;
-        if (frame.has_depth) rs_prod->process_rgbd(frame);
+        if (frame.has_depth) {
+            try {
+                if (!rs_prod->process_rgbd(frame)) {
+                    log_processing_error("processing returned no image");
+                    frame.color_image.release();
+                    frame.depth_image_raw.release();
+                }
+            } catch (const std::exception& e) {
+                log_processing_error(e.what());
+                frame.color_image.release();
+                frame.depth_image_raw.release();
+            }
+        }
         sensor_sync->onRGBD(std::move(frame));
         coordinator_cv.notify_one();
     }
@@ -200,7 +218,7 @@ void coordinator_loop()
             publish(g_rs_imu_pub, msg);
         }
         for (const auto& raw : batch.imu_writes)
-            if (!sensor_writer->enqueue_imu(raw.frame, raw.mapped_ns)) {
+            if (!sensor_writer->enqueue_imu(raw, raw.mapped_ns)) {
                 request_stop("Recording queue overflow", true);
                 break;
             }
@@ -242,23 +260,20 @@ int main(int argc, char **argv)
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
     const double trigger_frequency = get_param<double>("trigger_frequency", 30.0);
     trigger_tolerance_ns = get_param<std::int64_t>("trigger_tolerance_ns", 5000000);
-    stereo_pair_tolerance_ns = get_param<std::int64_t>("stereo_pair_tolerance_ns", 10000000);
-    if (trigger_frequency <= 0 || trigger_tolerance_ns < 0 || stereo_pair_tolerance_ns <= 0) {
+    if (trigger_frequency <= 0 || trigger_tolerance_ns < 0) {
         std::cerr << "Invalid trigger timing parameters" << std::endl;
         return EXIT_FAILURE;
     }
     trigger_period_ns = static_cast<std::int64_t>(1.0e9 / trigger_frequency);
     calibration_max_latency_ns = get_param<std::int64_t>(
         "calibration_max_latency_ns", trigger_period_ns * 3 / 4);
-    if (calibration_max_latency_ns <= 0 || calibration_max_latency_ns >= trigger_period_ns ||
-        stereo_pair_tolerance_ns >= trigger_period_ns / 2) {
-        std::cerr << "Calibration latency must be below one trigger period and stereo tolerance below half" << std::endl;
+    if (calibration_max_latency_ns <= 0 || calibration_max_latency_ns >= trigger_period_ns) {
+        std::cerr << "Calibration latency must be below one trigger period" << std::endl;
         return EXIT_FAILURE;
     }
     SensorSyncConfig sensor_config;
     sensor_config.trigger_period_ns = trigger_period_ns;
     sensor_config.trigger_tolerance_ns = trigger_tolerance_ns;
-    sensor_config.stereo_pair_tolerance_ns = stereo_pair_tolerance_ns;
     sensor_config.calibration_max_latency_ns = calibration_max_latency_ns;
     sensor_config.imu_queue_size = imu_queue_size;
     sensor_config.save_imu = if_save != 0;
@@ -274,8 +289,8 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    g_guide_image_pubs[0] = advertise<ImageMsg>("guide_left/image", 4);
-    g_guide_image_pubs[1] = advertise<ImageMsg>("guide_right/image", 4);
+    g_guide_image_pubs[0] = advertise_sensor<ImageMsg>("guide_left/image", 3);
+    g_guide_image_pubs[1] = advertise_sensor<ImageMsg>("guide_right/image", 3);
     if (g_enable_guide_temperature) {
         g_guide_temp_pubs[0] = advertise_sensor<ImageMsg>("guide_left/temperature", 1);
         g_guide_temp_pubs[1] = advertise_sensor<ImageMsg>("guide_right/temperature", 1);
