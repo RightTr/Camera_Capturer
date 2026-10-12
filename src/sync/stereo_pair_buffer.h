@@ -16,7 +16,6 @@ template <typename Frame>
 class StereoPairBuffer {
 public:
     using Clock = std::chrono::steady_clock;
-    enum class TakeResult { pair, timeout, stopped };
 
     struct Pair {
         Frame left;
@@ -80,26 +79,14 @@ public:
 
     bool take(Pair& pair)
     {
-        return take_impl(pair, std::nullopt) == TakeResult::pair;
-    }
-
-    TakeResult take_for(Pair& pair, std::chrono::milliseconds timeout)
-    {
-        return take_impl(pair, Clock::now() + timeout);
-    }
-
-private:
-    TakeResult take_impl(Pair& pair, std::optional<Clock::time_point> report_at)
-    {
         std::unique_lock<std::mutex> lock(mutex_);
         while (!stopped_) {
             reconcile_locked(Clock::now());
             if (!pairs_.empty()) {
                 pair = std::move(pairs_.front());
                 pairs_.pop_front();
-                return TakeResult::pair;
+                return true;
             }
-            if (report_at && Clock::now() >= *report_at) return TakeResult::timeout;
             std::optional<Clock::time_point> deadline;
             for (const auto& queue : queues_) {
                 if (!queue.empty()) {
@@ -107,13 +94,13 @@ private:
                     if (!deadline || expiry < *deadline) deadline = expiry;
                 }
             }
-            if (report_at && (!deadline || *report_at < *deadline)) deadline = report_at;
             if (deadline) cv_.wait_until(lock, *deadline);
             else cv_.wait(lock);
         }
-        return TakeResult::stopped;
+        return false;
     }
 
+private:
     struct Item {
         Frame frame;
         std::uint64_t sequence;

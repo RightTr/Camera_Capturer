@@ -422,10 +422,7 @@ void guide_pair_consumer()
     std::uint64_t cursor_id = 0;
     std::uint64_t seen_gen = g_warmup_gen.load(std::memory_order_acquire);
     StereoPairBuffer<GuideFrame>::Pair pair;
-    for (;;) {
-        const auto result = g_stereo_pairs->take_for(pair, std::chrono::seconds(5));
-        if (result == StereoPairBuffer<GuideFrame>::TakeResult::stopped) break;
-        if (result == StereoPairBuffer<GuideFrame>::TakeResult::timeout) continue;
+    while (g_stereo_pairs->take(pair)) {
         const auto gen = g_warmup_gen.load(std::memory_order_acquire);
         if (gen != seen_gen) {
             seen_gen = gen;

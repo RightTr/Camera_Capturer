@@ -12,16 +12,6 @@ constexpr std::size_t kMaxTriggers = 256;
 constexpr std::size_t kMaxGuideFrames = 8;
 constexpr std::size_t kMaxPendingPairs = 16;
 constexpr std::size_t kMaxSlots = 32;
-
-std::int64_t guide_host_ns(const GuideFrame& frame)
-{
-    return to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec);
-}
-
-std::int64_t color_host_ns(const StampedRealSenseFrame& frame)
-{
-    return to_ns_from_sec_nsec(frame.color_host_sec, frame.color_host_nanosec);
-}
 }
 
 SensorSync::SensorSync(SensorSyncConfig config) : config_(config) {}
@@ -108,7 +98,8 @@ void SensorSync::onTrigger(const TriggerEvent& event, std::int64_t host_now_ns)
 void SensorSync::onThermal(GuideFrame frame)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!begun_ || !fatal_error_.empty() || guide_host_ns(frame) <
+    if (!begun_ || !fatal_error_.empty() ||
+        to_ns_from_sec_nsec(frame.host_sec, frame.host_nanosec) <
         epoch_start_host_ns_ + config_.trigger_period_ns) return;
     auto& queue = frame.cam_id == 0 ? left_frames_ : right_frames_;
     queue.push_back(std::move(frame));
@@ -118,7 +109,8 @@ void SensorSync::onThermal(GuideFrame frame)
 void SensorSync::onRGBD(StampedRealSenseFrame frame)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!begun_ || !fatal_error_.empty() || color_host_ns(frame) <
+    if (!begun_ || !fatal_error_.empty() ||
+        to_ns_from_sec_nsec(frame.color_host_sec, frame.color_host_nanosec) <
         epoch_start_host_ns_ + config_.trigger_period_ns) return;
     pending_rgbd_.push_back(std::move(frame));
     while (pending_rgbd_.size() > kMaxPendingPairs) pending_rgbd_.pop_front();
@@ -224,8 +216,8 @@ void SensorSync::assignPendingFramesLocked()
     for (int cam_id = 0; cam_id < 2; ++cam_id) {
         auto& frames = cam_id == 0 ? left_frames_ : right_frames_;
         for (auto it = frames.begin(); it != frames.end();) {
-            auto trigger = assignSlotLocked(it->sequence, guide_host_ns(*it),
-                                            thermal_slots_[cam_id]);
+            auto trigger = assignSlotLocked(it->sequence,
+                to_ns_from_sec_nsec(it->host_sec, it->host_nanosec), thermal_slots_[cam_id]);
             if (!trigger) { ++it; continue; }
             if (trigger->stamp_ns == 0) { it = frames.erase(it); continue; }
             const auto slot = slots_.find(trigger->id);
@@ -239,8 +231,8 @@ void SensorSync::assignPendingFramesLocked()
         }
     }
     for (auto it = pending_rgbd_.begin(); it != pending_rgbd_.end();) {
-        auto trigger = assignSlotLocked(it->color_frame_number, color_host_ns(*it),
-                                        rgbd_slot_);
+        auto trigger = assignSlotLocked(it->color_frame_number,
+            to_ns_from_sec_nsec(it->color_host_sec, it->color_host_nanosec), rgbd_slot_);
         if (!trigger) { ++it; continue; }
         if (trigger->stamp_ns == 0) { it = pending_rgbd_.erase(it); continue; }
         auto frame = std::move(*it);
