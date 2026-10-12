@@ -22,7 +22,6 @@ struct StampedRealSenseFrame {
     std::uint64_t depth_frame_number = 0;
     bool has_depth = false;
     std::uint64_t depth_sensor_ns = 0;
-    std::uint32_t trigger_step = 1;
     long color_host_sec = 0;
     long color_host_nanosec = 0;
     long color_sensor_sec = 0;
@@ -40,7 +39,6 @@ struct StampedImuFrame {
     uint64_t host_ns;
     uint64_t sensor_ns;
     float x, y, z;
-    std::uint64_t frame_number = 0;
     std::uint32_t fps = 0;
     std::int64_t mapped_ns = 0;
 };
@@ -72,7 +70,6 @@ public:
     void set_depth_processing_enabled(bool enabled);
     void set_rgbd_queue_size(int rgbd_max);
     void set_imu_queue_size(int imu_max);
-    void reset_rgbd_tracking();
 
     void run();
     bool pop_rgbd(StampedRealSenseFrame& frame);
@@ -81,7 +78,6 @@ public:
     bool pop_gyro(StampedImuFrame& frame);
     bool pop_imu_csv(StampedImuFrame& frame);
     bool pop_imu_unified(StampedImuFrame& frame);
-    void clear_rgbd();
     void stop();
 
 private:
@@ -110,7 +106,6 @@ private:
     std::function<void(double)> on_scale_;
 
     mutable std::mutex rgb_mutex_;
-    mutable std::mutex rgb_state_mutex_;
     mutable std::mutex accel_mutex_;
     mutable std::mutex gyro_mutex_;
     mutable std::mutex imu_save_mutex_;
@@ -132,9 +127,4 @@ private:
     rs2::align align_to_color_{RS2_STREAM_COLOR};
     rs2::spatial_filter spatial_filter_;
     rs2::temporal_filter temporal_filter_;
-    std::atomic<std::uint64_t> processed_count_{0};
-    std::atomic<std::uint64_t> depth_processed_count_{0};
-    std::atomic<std::uint64_t> depth_skipped_count_{0};
-    std::atomic<std::uint64_t> align_ns_{0};
-    std::atomic<std::uint64_t> filter_ns_{0};
 };

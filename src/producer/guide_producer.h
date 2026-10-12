@@ -158,7 +158,6 @@ public:
 
     void set_tenfold_celsius(bool tenfold_celsius);
     void set_temperature_enabled(bool enabled);
-    void set_max_queue_size(int max_size);
     void set_serial_query_time(int interval_ms);
     void run();
     bool pop(GuideFrame& frame);
@@ -206,7 +205,7 @@ private:
 
     // Serial port members
     LibSerial::SerialPort serial_;
-    std::atomic<SerialCmd> serial_cmd_{SerialCmd::NONE};
+    SerialCmd serial_cmd_ = SerialCmd::NONE;
     std::mutex serial_mutex_;
     std::condition_variable serial_cv_;
     std::ofstream* temp_stream_{nullptr};
@@ -215,6 +214,4 @@ private:
     bool capture_started_{false};
     bool capture_cleaned_{false};
     std::shared_ptr<GuideCaptureState> capture_state_;
-    mutable std::atomic<std::uint64_t> materialize_count_{0};
-    mutable std::atomic<std::uint64_t> materialize_ns_{0};
 };

@@ -333,12 +333,6 @@ GuideProducer::~GuideProducer()
 {
     stop();
     cleanup_capture();
-    const auto count = materialize_count_.load(std::memory_order_relaxed);
-    const auto total_ns = materialize_ns_.load(std::memory_order_relaxed);
-    std::cout << "[guide " << camera_name(cam_id_) << "] materialized=" << count
-              << " avg_materialize_ms="
-              << (count ? static_cast<double>(total_ns) / count / 1.0e6 : 0.0)
-              << std::endl;
 }
 
 void GuideProducer::set_tenfold_celsius(bool tenfold_celsius)
@@ -349,11 +343,6 @@ void GuideProducer::set_tenfold_celsius(bool tenfold_celsius)
 void GuideProducer::set_temperature_enabled(bool enabled)
 {
     temperature_enabled_ = enabled;
-}
-
-void GuideProducer::set_max_queue_size(int max_size)
-{
-    max_size_ = std::max(1, std::min(max_size, static_cast<int>(buffer_count_) - 2));
 }
 
 void GuideProducer::set_serial_query_time(int interval_ms)
@@ -418,7 +407,6 @@ bool GuideProducer::materialize(GuideFrame& frame) const
         return true;
     }
 
-    const auto started = std::chrono::steady_clock::now();
     auto* data = static_cast<char*>(frame.buffer.data());
     cv::Mat raw(kHeight, kWidth * 2, CV_8UC2, data);
     frame.param_data.parse(data + kParamOffset);
@@ -433,10 +421,6 @@ bool GuideProducer::materialize(GuideFrame& frame) const
     }
     frame.buffer.reset();
 
-    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - started).count();
-    materialize_ns_.fetch_add(static_cast<std::uint64_t>(elapsed), std::memory_order_relaxed);
-    materialize_count_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -617,7 +601,7 @@ void GuideProducer::set_temp_stream(std::ofstream* stream) {
 
 void GuideProducer::send_serial_command(GuideProducer::SerialCmd cmd) {
     std::unique_lock<std::mutex> lock(serial_mutex_);
-    serial_cmd_.store(cmd);
+    serial_cmd_ = cmd;
     serial_cv_.notify_one();
 }
 
@@ -644,11 +628,11 @@ void GuideProducer::serial_worker() {
             GuideProducer::SerialCmd cmd;
         std::unique_lock<std::mutex> lock(serial_mutex_);
         serial_cv_.wait(lock, [&] {
-                return serial_cmd_.load() != GuideProducer::SerialCmd::NONE || !live();
+                return serial_cmd_ != GuideProducer::SerialCmd::NONE || !live();
         });
 
         if (!live()) break;
-        cmd = serial_cmd_.exchange(GuideProducer::SerialCmd::NONE);
+        cmd = std::exchange(serial_cmd_, GuideProducer::SerialCmd::NONE);
         lock.unlock();
 
         try {
@@ -735,8 +719,8 @@ void GuideProducer::serial_query() {
     while (live()) {
         {
             std::unique_lock<std::mutex> lock(serial_mutex_);
-            if (serial_cmd_.load() == GuideProducer::SerialCmd::NONE) {
-                serial_cmd_.store(GuideProducer::SerialCmd::QUERY);
+            if (serial_cmd_ == GuideProducer::SerialCmd::NONE) {
+                serial_cmd_ = GuideProducer::SerialCmd::QUERY;
                 serial_cv_.notify_one();
             }
         }

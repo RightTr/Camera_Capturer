@@ -25,21 +25,6 @@ public:
         std::uint64_t slot = 0;
     };
 
-    struct Stats {
-        std::uint64_t paired = 0;
-        std::uint64_t expired_left = 0;
-        std::uint64_t expired_right = 0;
-        std::uint64_t unmatched_left = 0;
-        std::uint64_t unmatched_right = 0;
-        std::uint64_t overflow_left = 0;
-        std::uint64_t overflow_right = 0;
-        std::uint64_t overflow_pairs = 0;
-        std::uint64_t invalid = 0;
-        std::int64_t last_paired_delta_ns = 0;
-        std::int64_t last_unmatched_delta_ns = 0;
-        std::uint64_t max_abs_unmatched_delta_ns = 0;
-    };
-
     StereoPairBuffer(std::chrono::nanoseconds tolerance,
                      std::chrono::milliseconds max_wait,
                      std::size_t max_queued)
@@ -79,7 +64,6 @@ public:
             return false;
         if (match_ns <= 0 || (last_sequence_[camera_id] &&
             sequence <= *last_sequence_[camera_id])) {
-            ++stats_.invalid;
             return false;
         }
         if (!first_sequence_[camera_id]) first_sequence_[camera_id] = sequence;
@@ -88,7 +72,6 @@ public:
         queue.push_back({std::move(frame), sequence, match_ns, Clock::now()});
         if (queue.size() > max_queued_) {
             queue.pop_front();
-            ++(camera_id == 0 ? stats_.overflow_left : stats_.overflow_right);
         }
         reconcile_locked(Clock::now());
         cv_.notify_all();
@@ -103,12 +86,6 @@ public:
     TakeResult take_for(Pair& pair, std::chrono::milliseconds timeout)
     {
         return take_impl(pair, Clock::now() + timeout);
-    }
-
-    Stats stats() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return stats_;
     }
 
 private:
@@ -150,7 +127,6 @@ private:
             auto& queue = queues_[side];
             while (!queue.empty() && now - queue.front().arrived >= max_wait_) {
                 queue.pop_front();
-                ++(side == 0 ? stats_.expired_left : stats_.expired_right);
             }
         }
         for (;;) {
@@ -159,31 +135,22 @@ private:
             if (!left.empty() && !right.empty()) {
                 const auto delta = left.front().match_ns - right.front().match_ns;
                 if (delta >= -tolerance_ns_ && delta <= tolerance_ns_) {
-                    stats_.last_paired_delta_ns = delta;
                     const auto left_slot = left.front().sequence - *first_sequence_[0];
                     pairs_.push_back({std::move(left.front().frame),
                                       std::move(right.front().frame), generation_, left_slot});
                     if (pairs_.size() > max_queued_) {
                         pairs_.pop_front();
-                        ++stats_.overflow_pairs;
                     }
                     left.pop_front();
                     right.pop_front();
-                    ++stats_.paired;
                     continue;
                 }
                 // Both sensor clocks have the same V4L2 time base. The older
                 // frame cannot match this or any subsequent opposite frame.
-                stats_.last_unmatched_delta_ns = delta;
-                stats_.max_abs_unmatched_delta_ns = std::max(
-                    stats_.max_abs_unmatched_delta_ns,
-                    static_cast<std::uint64_t>(delta < 0 ? -delta : delta));
                 if (delta < 0) {
                     left.pop_front();
-                    ++stats_.unmatched_left;
                 } else {
                     right.pop_front();
-                    ++stats_.unmatched_right;
                 }
                 continue;
             }
@@ -194,7 +161,7 @@ private:
     const std::int64_t tolerance_ns_;
     const std::chrono::milliseconds max_wait_;
     const std::size_t max_queued_;
-    mutable std::mutex mutex_;
+    std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<Item> queues_[2];
     std::deque<Pair> pairs_;
@@ -202,5 +169,4 @@ private:
     std::optional<std::uint64_t> last_sequence_[2];
     std::uint64_t generation_ = 0;
     bool stopped_ = false;
-    Stats stats_;
 };

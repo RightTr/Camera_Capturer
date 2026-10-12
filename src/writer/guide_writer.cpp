@@ -48,9 +48,6 @@ bool GuideWriter::open()
         return false;
     }
 
-    std::cout << "Guide " << camera_name_ << " output dir: "
-              << std::filesystem::absolute(camera_dir).string()
-              << " (save_images=" << save_images_ << ")" << std::endl;
     time_stream_ << "sensor_time,host_time\n";
     time_stream_.flush();
     return time_stream_.good();

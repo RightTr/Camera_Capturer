@@ -122,16 +122,6 @@ RealSenseProducer::RealSenseProducer(
 RealSenseProducer::~RealSenseProducer()
 {
     stop();
-    const auto processed = processed_count_.load(std::memory_order_relaxed);
-    const auto depth_processed = depth_processed_count_.load(std::memory_order_relaxed);
-    std::cout << "[realsense] processed=" << processed
-              << " depth_processed=" << depth_processed
-              << " depth_skipped=" << depth_skipped_count_.load(std::memory_order_relaxed)
-              << " avg_align_ms="
-              << (depth_processed ? static_cast<double>(align_ns_.load()) / depth_processed / 1.0e6 : 0.0)
-              << " avg_filter_ms="
-              << (depth_processed ? static_cast<double>(filter_ns_.load()) / depth_processed / 1.0e6 : 0.0)
-              << std::endl;
 }
 
 void RealSenseProducer::set_sync_mode(int sync_mode)
@@ -200,14 +190,6 @@ void RealSenseProducer::set_rgbd_queue_size(int rgbd_max)
 void RealSenseProducer::set_imu_queue_size(int imu_max)
 {
     imu_max_ = imu_max;
-}
-
-void RealSenseProducer::reset_rgbd_tracking()
-{
-    std::lock_guard<std::mutex> lock(rgb_state_mutex_);
-    last_color_frame_number_ = 0;
-    last_depth_frame_number_ = 0;
-    rgbd_tracking_initialized_ = false;
 }
 
 bool RealSenseProducer::live() const
@@ -316,12 +298,7 @@ bool RealSenseProducer::process_rgbd(StampedRealSenseFrame& frame)
     if (depth_processing_enabled_ && frame.has_depth) {
         rs2::frameset output = frame.frameset;
         if (align_) {
-            const auto started = std::chrono::steady_clock::now();
             output = align_to_color_.process(output);
-            align_ns_.fetch_add(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - started).count()),
-                std::memory_order_relaxed);
         }
         frame.color_frame = output.get_color_frame();
         frame.depth_frame = output.get_depth_frame();
@@ -329,22 +306,14 @@ bool RealSenseProducer::process_rgbd(StampedRealSenseFrame& frame)
             return false;
         }
         if (filter_) {
-            const auto started = std::chrono::steady_clock::now();
             frame.depth_frame = spatial_filter_.process(frame.depth_frame);
             frame.depth_frame = temporal_filter_.process(frame.depth_frame);
-            filter_ns_.fetch_add(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - started).count()),
-                std::memory_order_relaxed);
         }
         const auto depth_video = frame.depth_frame.as<rs2::video_frame>();
         frame.depth_image_raw = cv::Mat(
             cv::Size(depth_video.get_width(), depth_video.get_height()),
             CV_16UC1,
             const_cast<void*>(depth_video.get_data()));
-        depth_processed_count_.fetch_add(1, std::memory_order_relaxed);
-    } else if (frame.has_depth) {
-        depth_skipped_count_.fetch_add(1, std::memory_order_relaxed);
     }
 
     const auto color_video = frame.color_frame.as<rs2::video_frame>();
@@ -352,16 +321,7 @@ bool RealSenseProducer::process_rgbd(StampedRealSenseFrame& frame)
         cv::Size(color_video.get_width(), color_video.get_height()),
         CV_8UC3,
         const_cast<void*>(color_video.get_data()));
-    processed_count_.fetch_add(1, std::memory_order_relaxed);
     return true;
-}
-
-void RealSenseProducer::clear_rgbd()
-{
-    std::lock_guard<std::mutex> lock(rgb_mutex_);
-    std::queue<StampedRealSenseFrame> empty;
-    rgbd_queue_.swap(empty);
-    rgb_cv_.notify_all();
 }
 
 bool RealSenseProducer::pop_accel(StampedImuFrame& frame)
@@ -579,7 +539,7 @@ void RealSenseProducer::run()
                     const rs2_vector d = f.as<rs2::motion_frame>().get_motion_data();
                     const int index = st == RS2_STREAM_ACCEL ? 0 : 1;
                     push_imu(StampedImuFrame{st, host_ns, sensor_ns, d.x, d.y, d.z,
-                                             f.get_frame_number(), selected_fps[index]});
+                                             selected_fps[index]});
                 });
                 imu_started = true;
                 } catch (const rs2::error& e) {
@@ -697,15 +657,9 @@ void RealSenseProducer::run()
         const long depth_sensor_sec = static_cast<long>(depth_sensor_ns / 1000000000ULL);
         const long depth_sensor_usec = static_cast<long>((depth_sensor_ns % 1000000000ULL) / 1000ULL);
 
-        std::uint64_t last_color_frame_number = 0;
-        std::uint64_t last_depth_frame_number = 0;
-        bool tracking_initialized = false;
-        {
-            std::lock_guard<std::mutex> lock(rgb_state_mutex_);
-            last_color_frame_number = last_color_frame_number_;
-            last_depth_frame_number = last_depth_frame_number_;
-            tracking_initialized = rgbd_tracking_initialized_;
-        }
+        const auto last_color_frame_number = last_color_frame_number_;
+        const auto last_depth_frame_number = last_depth_frame_number_;
+        const bool tracking_initialized = rgbd_tracking_initialized_;
 
         const bool new_color = color_frame_number > last_color_frame_number;
         const bool new_depth = !depth_stream_enabled_ || depth_frame_number > last_depth_frame_number;
@@ -762,7 +716,6 @@ void RealSenseProducer::run()
         frame.depth_frame_number = depth_frame_number;
         frame.has_depth = static_cast<bool>(depth_f);
         frame.depth_sensor_ns = depth_sensor_ns;
-        frame.trigger_step = trigger_step;
         frame.color_host_sec = color_host_s.count();
         frame.color_host_nanosec = color_host_ns;
         frame.color_sensor_sec = color_sensor_sec;
@@ -776,12 +729,9 @@ void RealSenseProducer::run()
             break;
         }
 
-        {
-            std::lock_guard<std::mutex> lock(rgb_state_mutex_);
-            last_color_frame_number_ = color_frame_number;
-            last_depth_frame_number_ = depth_frame_number;
-            rgbd_tracking_initialized_ = true;
-        }
+        last_color_frame_number_ = color_frame_number;
+        last_depth_frame_number_ = depth_frame_number;
+        rgbd_tracking_initialized_ = true;
     }
 
     pipeline.stop();

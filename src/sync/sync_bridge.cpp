@@ -168,8 +168,6 @@ bool SyncBridge::start()
         return false;
     }
 
-    std::printf("[start] SyncBridge ready\n");
-
     serial_worker_ = std::thread(&SyncBridge::serial_loop, this);
     gpio_worker_ = std::thread(&SyncBridge::gpio_loop, this);
     return true;
@@ -192,35 +190,6 @@ void SyncBridge::stop()
     if (gpio_worker_.joinable()) {
         gpio_worker_.join();
     }
-
-    std::size_t serial_queue_size = 0;
-    std::size_t gpio_queue_size = 0;
-    std::size_t trigger_queue_size = 0;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        serial_queue_size = serial_stamp_queue_.size();
-        gpio_queue_size = gpio_capture_queue_.size();
-        trigger_queue_size = trigger_event_queue_.size();
-    }
-
-    const auto pwm_count = pwm_count_.load(std::memory_order_relaxed);
-    const auto serial_count = serial_count_.load(std::memory_order_relaxed);
-    const auto matched_count = matched_count_.load(std::memory_order_relaxed);
-    const auto diff = static_cast<std::int64_t>(pwm_count) -
-                      static_cast<std::int64_t>(serial_count);
-    std::printf("[Sync Summary]\n");
-    std::printf("Trigger : %llu\n",
-                static_cast<unsigned long long>(pwm_count));
-    std::printf("Serial  : %llu\n",
-                static_cast<unsigned long long>(serial_count));
-    std::printf("Matched : %llu\n",
-                static_cast<unsigned long long>(matched_count));
-    std::printf("Diff    : %lld\n",
-                static_cast<long long>(diff));
-    std::printf("Queues  : serial=%zu gpio=%zu trigger=%zu\n",
-                serial_queue_size,
-                gpio_queue_size,
-                trigger_queue_size);
 
     send_control_request(kSetMasterStreamCmd, {0}, kSetMasterStreamCmd);
     if (gpio_line_) {
@@ -358,8 +327,6 @@ bool SyncBridge::send_control_request(unsigned char cmd,
                     }
                     if (response_cmd == expected_cmd) {
                         if (response) *response = response_payload;
-                        if (cmd == kSetMasterStreamCmd)
-                            std::printf("Sync-board command 0x%02X acknowledged\n", cmd);
                         return true;
                     }
                 }
@@ -386,7 +353,6 @@ void SyncBridge::handle_serial_frame(unsigned char cmd,
         return;
     }
 
-    serial_count_.fetch_add(1, std::memory_order_relaxed);
     const std::uint64_t utc_time_us = read_u64_le(payload.data() + 4);
     const auto output_ns = static_cast<std::int64_t>(utc_time_us * 1000ULL);
 
@@ -411,7 +377,6 @@ void SyncBridge::matchQueuedEventsLocked()
         serial_stamp_queue_.pop_front();
         gpio_capture_queue_.pop_front();
 
-        matched_count_.fetch_add(1, std::memory_order_relaxed);
         if (trigger_event_queue_.size() >= config_.max_queue_size) {
             std::fprintf(stderr, "SyncBridge trigger queue overflow: size=%zu max=%zu\n",
                          trigger_event_queue_.size(),
@@ -533,7 +498,6 @@ void SyncBridge::gpio_loop()
             continue;
         }
 
-        pwm_count_.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(mutex_);
         if (gpio_capture_queue_.size() >= config_.max_queue_size) {
             std::fprintf(stderr, "SyncBridge gpio queue overflow: size=%zu max=%zu\n",

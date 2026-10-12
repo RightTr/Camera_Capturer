@@ -33,13 +33,11 @@ using SyncMsgConstPtr = MessageConstPtr<Int32Msg>;
 using SteadyClock = std::chrono::steady_clock;
 
 int if_save = 0;
-int rs_sync_mode = 0;
 bool g_enable_guide_temperature = true;
 std::atomic<bool> quitFlag(false);
 std::atomic<bool> fatalFlag(false);
 std::atomic<bool> g_output_started(false);
 SteadyClock::time_point g_output_start_at;
-std::string outputdir;
 std::unique_ptr<SensorWriter> sensor_writer;
 std::unique_ptr<GuideProducer> guides[2];
 std::unique_ptr<RealSenseProducer> rs_prod;
@@ -55,9 +53,6 @@ ImuPublisher g_rs_imu_pub;
 
 std::mutex coordinator_mutex;
 std::condition_variable coordinator_cv;
-std::int64_t trigger_period_ns = 33333333;
-std::int64_t trigger_tolerance_ns = 5000000;
-std::int64_t calibration_max_latency_ns = 25000000;
 void request_stop(const char* reason, bool fatal = false)
 {
     if (fatal) fatalFlag.store(true);
@@ -239,13 +234,11 @@ int main(int argc, char **argv)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    outputdir = "/data/home/pi/Cap";
-
     ros_init(argc, argv, "rgbdt_trigger_node");
-    rs_sync_mode = get_param<int>("rs_sync_mode", 3);
+    const int rs_sync_mode = get_param<int>("rs_sync_mode", 3);
     if_save = get_param<int>("if_save", 0);
     const int if_save_img = get_param<int>("if_save_img", 1);
-    outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
+    const std::string outputdir = get_param<std::string>("output_dir", "/data/home/pi/Cap");
     const int guide_query_ms = get_param<int>("guide_query_ms", 100);
     const int imu_fps = get_param<int>("imu_fps", 200);
     const int imu_queue_size = get_param<int>("imu_queue_size", 2000);
@@ -259,13 +252,13 @@ int main(int argc, char **argv)
     const std::string trigger_line = get_param<std::string>("trigger_line", "PAA.00");
     const int sync_queue_size = get_param<int>("sync_queue_size", 4096);
     const double trigger_frequency = get_param<double>("trigger_frequency", 30.0);
-    trigger_tolerance_ns = get_param<std::int64_t>("trigger_tolerance_ns", 5000000);
+    const auto trigger_tolerance_ns = get_param<std::int64_t>("trigger_tolerance_ns", 5000000);
     if (trigger_frequency <= 0 || trigger_tolerance_ns < 0) {
         std::cerr << "Invalid trigger timing parameters" << std::endl;
         return EXIT_FAILURE;
     }
-    trigger_period_ns = static_cast<std::int64_t>(1.0e9 / trigger_frequency);
-    calibration_max_latency_ns = get_param<std::int64_t>(
+    const auto trigger_period_ns = static_cast<std::int64_t>(1.0e9 / trigger_frequency);
+    const auto calibration_max_latency_ns = get_param<std::int64_t>(
         "calibration_max_latency_ns", trigger_period_ns * 3 / 4);
     if (calibration_max_latency_ns <= 0 || calibration_max_latency_ns >= trigger_period_ns) {
         std::cerr << "Calibration latency must be below one trigger period" << std::endl;
@@ -343,8 +336,6 @@ int main(int argc, char **argv)
     // configure both explicitly on every launch.
     for (auto& guide : guides)
         guide->send_serial_command(GuideProducer::SerialCmd::SYNC_ON);
-    std::cout << "[start] Guide external sync enabled on both cameras" << std::endl;
-
     std::atomic<bool> rs_ready(false);
     std::mutex rs_ready_mutex;
     std::condition_variable rs_ready_cv;
@@ -375,19 +366,24 @@ int main(int argc, char **argv)
     rs_prod->set_depth_processing_enabled(true);
 
     std::vector<std::thread> producers;
+    std::vector<std::thread> consumers;
+    const auto stop_capture = [&] {
+        quitFlag.store(true);
+        coordinator_cv.notify_all();
+        if (sync_bridge) sync_bridge->stop();
+        if (rs_prod) rs_prod->stop();
+        for (auto& guide : guides) if (guide) guide->stop();
+        for (auto& thread : producers) if (thread.joinable()) thread.join();
+        for (auto& thread : consumers) if (thread.joinable()) thread.join();
+        sensor_writer->stop();
+    };
     producers.emplace_back([]() { rs_prod->run(); });
 
     if (!wait_realsense_ready(rs_ready, rs_ready_mutex, rs_ready_cv)) {
         request_stop("RealSense startup timeout");
-        if (sync_bridge) sync_bridge->stop();
-        if (rs_prod) rs_prod->stop();
-        for (auto& guide : guides) if (guide) guide->stop();
-        for (auto& t : producers) {
-            if (t.joinable()) t.join();
-        }
+        stop_capture();
         return EXIT_FAILURE;
     }
-    std::cout << "[start] RealSense ready" << std::endl;
 
     SyncBridge::Config sync_config;
     sync_config.serial_port = serial_port;
@@ -397,18 +393,12 @@ int main(int argc, char **argv)
     sync_bridge = std::make_unique<SyncBridge>(sync_config);
     if (!sync_bridge->start()) {
         request_stop("SyncBridge start failed");
-        if (sync_bridge) sync_bridge->stop();
-        if (rs_prod) rs_prod->stop();
-        for (auto& guide : guides) if (guide) guide->stop();
-        for (auto& t : producers) {
-            if (t.joinable()) t.join();
-        }
+        stop_capture();
         return EXIT_FAILURE;
     }
     g_output_start_at = SteadyClock::now() + std::chrono::seconds(std::max(0, warmup));
     if (if_save) sensor_writer->start();
 
-    std::vector<std::thread> consumers;
     consumers.emplace_back(trigger_loop);
     consumers.emplace_back(guide_consumer, 0);
     consumers.emplace_back(guide_consumer, 1);
@@ -420,19 +410,9 @@ int main(int argc, char **argv)
 
     if (!GuideProducer::start_capture_pair(guides)) {
         request_stop("Guide capture start failed");
-        if (sync_bridge) sync_bridge->stop();
-        if (rs_prod) rs_prod->stop();
-        for (auto& guide : guides) if (guide) guide->stop();
-        for (auto& t : producers) {
-            if (t.joinable()) t.join();
-        }
-        for (auto& t : consumers) {
-            if (t.joinable()) t.join();
-        }
-        sensor_writer->stop();
+        stop_capture();
         return EXIT_FAILURE;
     }
-    std::cout << "[start] Guide left/right ready" << std::endl;
 
     for (int i = 0; i < 2; ++i) {
         producers.emplace_back([i]() { guides[i]->run(); });
@@ -444,22 +424,7 @@ int main(int argc, char **argv)
         rate.sleep();
     }
 
-    quitFlag.store(true);
-    coordinator_cv.notify_all();
-    if (sync_bridge) sync_bridge->stop();
-    if (rs_prod) rs_prod->stop();
-    for (auto& guide : guides) if (guide) guide->stop();
-
-    for (auto& t : producers) t.join();
-    for (auto& t : consumers) t.join();
-    sensor_writer->stop();
-
-    const auto stats = sensor_sync->stats();
-    std::cerr << "[sync_continuity] imu=" << stats.published_imu
-              << " max_imu_dt_ms=" << stats.max_imu_dt_ns / 1.0e6
-              << " dropped_gyro_samples=" << stats.dropped_gyro_samples
-              << " guide_pairs=" << stats.published_guide_pairs
-              << " rgbd_pairs=" << stats.published_rgbd_pairs << std::endl;
+    stop_capture();
     shutdown();
     return fatalFlag.load() ? EXIT_FAILURE : EXIT_SUCCESS;
 }

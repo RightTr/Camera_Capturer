@@ -46,9 +46,6 @@ bool RealSenseWriter::open()
         return false;
     }
 
-    std::cout << "RealSense output dir: "
-              << std::filesystem::absolute(output_dir_ + "/realsense").string()
-              << " (save_images=" << save_images_ << ")" << std::endl;
     time_stream_ << "color_frame_number,color_sensor_time,color_host_time,"
                     "depth_frame_number,depth_sensor_time,depth_host_time\n";
     accel_stream_ << "host_time,sensor_time,ax,ay,az,trigger_time\n";

@@ -52,14 +52,6 @@ struct SensorSyncBatch {
     std::string fatal_error;
 };
 
-struct SensorSyncStats {
-    std::uint64_t published_imu = 0;
-    std::uint64_t dropped_gyro_samples = 0;
-    std::uint64_t published_guide_pairs = 0;
-    std::uint64_t published_rgbd_pairs = 0;
-    std::int64_t max_imu_dt_ns = 0;
-};
-
 class SensorSync {
 public:
     using Clock = std::chrono::steady_clock;
@@ -71,7 +63,6 @@ public:
     void onRGBD(StampedRealSenseFrame frame);
     void onIMU(StampedImuFrame frame, Clock::time_point now);
     SensorSyncBatch publishReady(Clock::time_point now);
-    SensorSyncStats stats() const;
 
 private:
     struct StreamSlot {
@@ -83,9 +74,8 @@ private:
         std::uint64_t sensor_ns = 0;
         std::int64_t trigger_ns = 0;
     };
-    void resetPrerollLocked(const char* reason, std::int64_t host_now_ns,
-                            SensorSyncBatch* batch);
-    void failLocked(const char* reason, SensorSyncBatch* batch = nullptr);
+    void resetPrerollLocked(const char* reason, std::int64_t host_now_ns);
+    void failLocked(const char* reason);
     std::optional<SensorTrigger> assignSlotLocked(std::uint64_t sequence,
         std::int64_t host_ns, StreamSlot& stream);
     void assignPendingFramesLocked();
@@ -100,7 +90,6 @@ private:
     bool begun_ = false;
     bool imu_timeline_started_ = false;
     std::string fatal_error_;
-    std::uint64_t epoch_ = 0;
     std::int64_t epoch_start_host_ns_ = 0;
     std::deque<SensorTrigger> triggers_;
     std::map<std::uint64_t, std::shared_ptr<SensorImageSlot>> slots_;
@@ -110,7 +99,6 @@ private:
     std::deque<StampedImuFrame> accel_;
     std::deque<StampedImuFrame> gyro_;
     std::optional<ImuAnchor> imu_mapping_anchor_;
-    bool imu_clock_mapped_ = false;
     bool board_host_offset_valid_ = false;
     std::int64_t board_host_offset_ns_ = 0;
     bool imu_phase_calibrated_ = false;
@@ -130,5 +118,4 @@ private:
     std::int64_t last_published_imu_stamp_ = 0;
     std::int64_t last_guide_stamp_ = 0;
     std::int64_t last_rgbd_stamp_ = 0;
-    SensorSyncStats stats_;
 };
